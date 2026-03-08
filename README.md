@@ -9,11 +9,22 @@ Now you can use the eInk display with Linux on the Lenovo ThinkBook Gen 4 Plus l
 This software was independently developed without any input, support or documentation from either eInk or Lenovo. It has only been tested on one system, my own. While it has never damaged my hardware, either temporarily or permanently, it is possible for it to do so if it malfunctions. Temporary impairment can occur should corrupted or invalid commands be written to the Embedded Controller or the T-CON, and permanent damage is theoretically possible. If this occurs, you may need to hard reboot your system or even hard reset the EC (see instructions below). This software is currently a proof-of-concept demonstration, alpha-quality and has known bugs. Do not use this software if you are not willing to accept the risks of temporary or permanent hardware damage or data loss and lost productivity.
 
 ## System Requirements and Installation
-At the present time, Tinta4Plus only works on exactly the following system configuration. You will need to install the following Linux distribution and configuration:
-- Xubuntu 25.04 (Plucky Puffin) https://cdimage.ubuntu.com/xubuntu/releases/plucky/release/
-  - Xorg X11 Window System (not tested yet on Wayland). Xorg is the default system for Xubuntu.
-- Required Python 3 packages: `sudo apt install python3.13 python3-pip python3-portio python3-tk python3-usb`
-- Required additional packages: `sudo apt install feh imv mokutil x11-xserver-utils xfconf`
+Tinta4Plus supports the following configurations:
+- **Ubuntu 24.04 LTS** or later with **GNOME** (X11 or Wayland)
+- **Xubuntu 25.04** (Plucky Puffin) with **XFCE** (X11) — https://cdimage.ubuntu.com/xubuntu/releases/plucky/release/
+
+The session type (X11 / Wayland) and desktop environment are auto-detected at startup.
+
+### Required packages (all configurations)
+```bash
+sudo apt install python3-portio python3-tk python3-usb feh imv mokutil
+```
+
+### Additional packages by desktop environment
+- **GNOME**: `sudo apt install python3-dbus` (recommended — enables native D-Bus display control; falls back to gdbus CLI if absent)
+- **XFCE**: `sudo apt install x11-xserver-utils xfconf`
+
+### Other requirements
 - Disable Secure Boot in order to control the eInk frontlight and other hardware features
   - Reboot your laptop and press ENTER repeatedly immediately after power on until you get the boot menu.
   - Hit the approprite F key to enter BIOS settings.
@@ -43,8 +54,8 @@ This software is provided "AS IS", without any warranty of any kind. It may cont
 WARNING: This software may temporarily or permanently render your hardware inoperable. It may corrupt or damage the Embedded Controller or eInk T-CON controller in your laptop. This software is a prototype, pre-production, alpha quality. It is only known to work, albeit with some bugs, on the author's specific hardware and Linux configuration.
 
 ### REQUIREMENTS AND RISKS:
-1. Ubuntu / Xubuntu 25.04 "Plucky" with XFCE4 desktop environment is required (Xubuntu / XFCE4 only)
-2. Xorg (X11) windowing system, not Wayland. The software has not been tested to work with Wayland.
+1. Ubuntu 24.04 LTS or later with GNOME, or Xubuntu 25.04 with XFCE4 desktop environment
+2. Xorg (X11) or Wayland windowing system (Wayland support uses GNOME Mutter D-Bus API)
 3. Frontlight control requires access to the embedded controller (EC) which requires disabling Secure Boot in the BIOS. Disabling Secure Boot may reduce system security and expose you to certain types of attacks, including viruses, ransomware, rootkits and bootkits.
 4. Root access is required to write to the EC
 5. This software writes to low-level hardware, including the EC and the eInk display's T-CON

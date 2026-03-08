@@ -32,6 +32,7 @@ from datetime import datetime
 
 from HelperClient import HelperClient
 from DisplayManager import DisplayManager
+from ThemeManager import ThemeManager
 
 class FloatingRefreshButton:
     """Floating refresh button window that stays on top"""
@@ -203,6 +204,10 @@ class EInkControlGUI:
 
         # Managers
         self.display_mgr = DisplayManager(logger)
+        self.theme_mgr = ThemeManager(logger)
+
+        # Log detected session info
+        self.logger.info(f"Session: {self.display_mgr.session_type}, Desktop: {self.display_mgr.desktop_env}")
 
         # Brightness timer for debouncing
         self.brightness_timer = None
@@ -237,47 +242,6 @@ class EInkControlGUI:
 
         # Initialize helper after short delay
         self.root.after(500, self.initialize_helper)
-
-    def set_xfce_theme(self, theme_name):
-        """Set XFCE theme programmatically.
-
-        Args:
-            theme_name: Theme name like 'HighContrast' or 'Adwaita-dark'
-
-        Returns:
-            bool: True if successful, False otherwise
-        """
-        try:
-            subprocess.run([
-                'xfconf-query',
-                '-c', 'xsettings',
-                '-p', '/Net/ThemeName',
-                '-s', theme_name
-            ], check=True, capture_output=True)
-            self.log_message(f"Switched to {theme_name} theme")
-            return True
-        except subprocess.CalledProcessError as e:
-            self.log_message(f"Failed to set theme: {e}", level='error')
-            return False
-        except FileNotFoundError:
-            self.log_message("xfconf-query not found (not running XFCE?)", level='error')
-            return False
-
-    def get_current_theme(self):
-        """Get the current XFCE theme.
-
-        Returns:
-            str: Current theme name, or None if failed
-        """
-        try:
-            result = subprocess.run([
-                'xfconf-query',
-                '-c', 'xsettings',
-                '-p', '/Net/ThemeName'
-            ], capture_output=True, text=True, check=True)
-            return result.stdout.strip()
-        except:
-            return None
 
     def load_settings(self):
         """Load settings from configuration file"""
@@ -840,7 +804,7 @@ class EInkControlGUI:
 
             # Step 0: Switch to High Contrast theme if enabled
             if self.autoswitch_theme_var.get():
-                self.set_xfce_theme(self.THEME_HIGH_CONTRAST)
+                self.theme_mgr.set_theme(self.THEME_HIGH_CONTRAST)
 
             # Step 1: Enable E-Ink on eDP-2 first
             self.log_message(f"Enabling E-Ink display on {self.DISPLAY_EINK} with {self.display_scale}x scale...")
@@ -888,13 +852,18 @@ class EInkControlGUI:
                 # Start periodic refresh timer if configured
                 self._start_refresh_timer()
 
-                # Create floating refresh button
-                self.log_message("Creating floating refresh button...")
-                self.floating_refresh_button = FloatingRefreshButton(
-                    self.root,
-                    self.on_refresh_full,
-                    self.logger
-                )
+                # Create floating refresh button (may fail on Wayland due to
+                # lack of overrideredirect / always-on-top support)
+                try:
+                    self.log_message("Creating floating refresh button...")
+                    self.floating_refresh_button = FloatingRefreshButton(
+                        self.root,
+                        self.on_refresh_full,
+                        self.logger
+                    )
+                except Exception as e:
+                    self.logger.warning(f"Floating refresh button not available: {e}")
+                    self.log_message("Floating refresh button unavailable (Wayland limitation)", level='warning')
 
         else:
             # Disabling E-Ink
@@ -988,7 +957,7 @@ class EInkControlGUI:
 
                 # Step 6: Switch to Adwaita-dark theme if enabled
                 if self.autoswitch_theme_var.get():
-                    self.set_xfce_theme(self.THEME_ADWAITA_DARK)
+                    self.theme_mgr.set_theme(self.THEME_ADWAITA_DARK)
             else:
                 # Failed to disable - kill image viewer
                 if self.eink_image_process:
