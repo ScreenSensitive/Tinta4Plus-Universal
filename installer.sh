@@ -1,5 +1,5 @@
 #!/bin/bash
-set -e
+set -eE
 
 # Tinta4Plus Installer
 # Installs either PyInstaller binaries or Python scripts into the system
@@ -12,6 +12,8 @@ AUTOSTART_DIR="/etc/xdg/autostart"
 POLKIT_DIR="/usr/share/polkit-1/actions"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 INSTALL_MODE=""  # "binary" or "script"
+LOG_FILE="/tmp/tinta4plus-install.log"
+CURRENT_STEP=""
 
 # Colors
 RED='\033[0;31m'
@@ -20,9 +22,33 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-info()  { echo -e "${GREEN}[INFO]${NC} $1"; }
-warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
-error() { echo -e "${RED}[ERROR]${NC} $1"; }
+info()  { echo -e "${GREEN}[INFO]${NC} $1"; echo "[INFO] $1" >> "$LOG_FILE"; }
+warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; echo "[WARN] $1" >> "$LOG_FILE"; }
+error() { echo -e "${RED}[ERROR]${NC} $1"; echo "[ERROR] $1" >> "$LOG_FILE"; }
+
+# ─── Error trap ──────────────────────────────────────────────────────────────
+
+on_error() {
+    local exit_code=$?
+    local line_no=$1
+    echo ""
+    error "Installation failed at line ${line_no} (exit code ${exit_code})"
+    if [ -n "$CURRENT_STEP" ]; then
+        error "During step: ${CURRENT_STEP}"
+    fi
+    error "See full log: ${LOG_FILE}"
+    echo ""
+    error "You can retry the installation after fixing the issue."
+    error "To clean up a partial install: sudo bash installer.sh --uninstall"
+    exit "$exit_code"
+}
+
+trap 'on_error ${LINENO}' ERR
+
+step() {
+    CURRENT_STEP="$1"
+    info "$1"
+}
 
 # ─── Uninstall ───────────────────────────────────────────────────────────────
 
@@ -163,7 +189,7 @@ detect_de() {
 # ─── Install system dependencies ────────────────────────────────────────────
 
 install_deps() {
-    info "Installing system dependencies..."
+    step "Installing system dependencies"
 
     # Common packages
     local pkgs="libusb-1.0-0"
@@ -184,21 +210,36 @@ install_deps() {
             ;;
     esac
 
-    apt-get update -qq
-    apt-get install -y -qq $pkgs
-    info "APT dependencies installed."
+    if ! apt-get update -qq >> "$LOG_FILE" 2>&1; then
+        error "apt-get update failed. Check your internet connection and sources."
+        error "See: ${LOG_FILE}"
+        exit 1
+    fi
+
+    if ! apt-get install -y -qq $pkgs >> "$LOG_FILE" 2>&1; then
+        error "apt-get install failed for packages: ${pkgs}"
+        error "See: ${LOG_FILE}"
+        exit 1
+    fi
+    info "APT packages installed: ${pkgs}"
 
     # Script mode: install pip packages not available in apt
     if [ "$INSTALL_MODE" = "script" ]; then
-        info "Installing Python pip packages..."
+        step "Installing Python pip packages (portio, pyusb)"
         local pip_cmd="pip3"
         if ! command -v pip3 &>/dev/null; then
-            apt-get install -y -qq python3-pip
+            apt-get install -y -qq python3-pip >> "$LOG_FILE" 2>&1
         fi
         # Install as system-wide (running as root)
-        $pip_cmd install --break-system-packages portio pyusb 2>/dev/null \
-            || $pip_cmd install portio pyusb 2>/dev/null \
-            || warn "pip install failed — you may need to run: pip3 install portio pyusb"
+        if $pip_cmd install --break-system-packages portio pyusb >> "$LOG_FILE" 2>&1; then
+            info "pip packages installed."
+        elif $pip_cmd install portio pyusb >> "$LOG_FILE" 2>&1; then
+            info "pip packages installed."
+        else
+            warn "pip install failed for portio/pyusb."
+            warn "You will need to run manually: pip3 install portio pyusb"
+            warn "See: ${LOG_FILE}"
+        fi
     fi
 }
 
@@ -256,29 +297,38 @@ check_deps() {
 # ─── Install: binary mode ───────────────────────────────────────────────────
 
 install_binary() {
-    info "Installing compiled binaries to ${INSTALL_DIR}..."
+    step "Installing compiled binaries to ${INSTALL_DIR}"
 
     mkdir -p "${INSTALL_DIR}"
 
-    # Copy onedir bundles
+    info "Copying GUI bundle..."
     cp -r "${SCRIPT_DIR}/dist/tinta4plus"        "${INSTALL_DIR}/"
+    info "Copying helper bundle..."
     cp -r "${SCRIPT_DIR}/dist/tinta4plus-helper"  "${INSTALL_DIR}/"
 
-    # Set permissions
     chmod 755 "${INSTALL_DIR}/tinta4plus/tinta4plus"
     chmod 755 "${INSTALL_DIR}/tinta4plus-helper/tinta4plus-helper"
 
-    # Create symlinks in /usr/local/bin
     ln -sf "${INSTALL_DIR}/tinta4plus/tinta4plus"              "${BIN_DIR}/tinta4plus"
     ln -sf "${INSTALL_DIR}/tinta4plus-helper/tinta4plus-helper" "${BIN_DIR}/tinta4plus-helper"
 
-    info "Binaries installed."
+    # Verify binaries are executable
+    if [ ! -x "${BIN_DIR}/tinta4plus" ]; then
+        error "GUI binary symlink is not executable: ${BIN_DIR}/tinta4plus"
+        exit 1
+    fi
+    if [ ! -x "${BIN_DIR}/tinta4plus-helper" ]; then
+        error "Helper binary symlink is not executable: ${BIN_DIR}/tinta4plus-helper"
+        exit 1
+    fi
+
+    info "Binaries installed and verified."
 }
 
 # ─── Install: script mode ───────────────────────────────────────────────────
 
 install_script() {
-    info "Installing Python scripts to ${INSTALL_DIR}..."
+    step "Installing Python scripts to ${INSTALL_DIR}"
 
     mkdir -p "${INSTALL_DIR}"
 
@@ -294,16 +344,31 @@ install_script() {
         WatchdogTimer.py
     )
 
+    local copy_failed=false
     for f in "${py_files[@]}"; do
-        cp "${SCRIPT_DIR}/${f}" "${INSTALL_DIR}/"
+        if [ ! -f "${SCRIPT_DIR}/${f}" ]; then
+            error "Missing source file: ${f}"
+            copy_failed=true
+        else
+            cp "${SCRIPT_DIR}/${f}" "${INSTALL_DIR}/"
+        fi
     done
+    if [ "$copy_failed" = true ]; then
+        error "Some source files are missing. Installation cannot continue."
+        exit 1
+    fi
 
     # Copy privacy images
+    local img_count=0
     for img in "${SCRIPT_DIR}"/eink-disable*.jpg; do
-        [ -f "$img" ] && cp "$img" "${INSTALL_DIR}/"
+        [ -f "$img" ] && cp "$img" "${INSTALL_DIR}/" && ((img_count++))
     done
+    if [ "$img_count" -eq 0 ]; then
+        warn "No privacy images (eink-disable*.jpg) found — privacy screen will not work."
+    else
+        info "Copied ${img_count} privacy image(s)."
+    fi
 
-    # Set permissions
     chmod 755 "${INSTALL_DIR}/Tinta4Plus.py"
     chmod 755 "${INSTALL_DIR}/HelperDaemon.py"
 
@@ -326,7 +391,7 @@ WRAPPER
 # ─── Install desktop entries ────────────────────────────────────────────────
 
 install_desktop() {
-    info "Installing desktop entries..."
+    step "Installing desktop entries"
 
     cp "${SCRIPT_DIR}/tinta4plus.desktop"           "${DESKTOP_DIR}/"
     cp "${SCRIPT_DIR}/tinta4plus-autostart.desktop"  "${AUTOSTART_DIR}/"
@@ -367,6 +432,9 @@ install_polkit() {
 # ─── Main ────────────────────────────────────────────────────────────────────
 
 main() {
+    # Initialize log file
+    echo "=== Tinta4Plus Installer — $(date) ===" > "$LOG_FILE"
+
     echo ""
     echo "╔══════════════════════════════════════╗"
     echo "║      Tinta4Plus Installer            ║"
@@ -404,6 +472,7 @@ main() {
     info " It will also autostart on next login."
     info ""
     info " To uninstall:  sudo bash installer.sh --uninstall"
+    info " Install log:   ${LOG_FILE}"
     info "════════════════════════════════════════"
     echo ""
 }
