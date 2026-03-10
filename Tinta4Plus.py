@@ -26,6 +26,7 @@ import os
 import time
 import threading
 import logging
+import random
 import webbrowser
 import json
 from datetime import datetime
@@ -180,9 +181,13 @@ class EInkControlGUI:
     DISPLAY_OLED = "eDP-1"
     DISPLAY_EINK = "eDP-2"
 
-    # E-Ink privacy image (displayed when disabling E-Ink to clear private data)
+    # E-Ink privacy images (one picked at random when disabling E-Ink)
     # NOTE: must install feh and imv for this to work!
-    EINK_DISABLED_IMAGE = "eink-disable.jpg"
+    EINK_DISABLED_IMAGES = [
+        "eink-disable1.jpg",
+        "eink-disable2.jpg",
+        "eink-disable3.jpg",
+    ]
 
     # XFCE theme names
     THEME_HIGH_CONTRAST = "HighContrast"
@@ -569,21 +574,21 @@ class EInkControlGUI:
     def _launch_helper_thread(self):
         """Launch helper daemon in background thread"""
         try:
-            # Determine helper script path
             helper_path = self.HELPER_SCRIPT
-            
-            # If not installed, try relative to this script
+
             if not os.path.exists(helper_path):
-                script_dir = os.path.dirname(os.path.abspath(__file__))
-                helper_path = os.path.join(script_dir, 'thinkbook-eink-helper.py')
-            
-            if not os.path.exists(helper_path):
-                self.root.after(0, self._helper_launch_failed, "Helper script not found")
+                self.root.after(0, self._helper_launch_failed, "Helper not found: " + helper_path)
                 return
-            
-            # Launch via pkexec (will show password prompt)
+
+            # If helper is a compiled binary, run it directly via pkexec
+            # If it's a .py script, invoke via python3
+            if helper_path.endswith('.py'):
+                cmd = ['pkexec', 'python3', helper_path]
+            else:
+                cmd = ['pkexec', helper_path]
+
             self.helper_process = subprocess.Popen(
-                ['pkexec', 'python3', helper_path],
+                cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE
             )
@@ -883,15 +888,19 @@ class EInkControlGUI:
             self.btn_set_dynamic.config(state='disabled')
             self.btn_set_reading.config(state='disabled')
 
-            # Step 4: Display privacy image on E-Ink screen
-            image_path = self.EINK_DISABLED_IMAGE
+            # Step 4: Display random privacy image on E-Ink screen
+            chosen = random.choice(self.EINK_DISABLED_IMAGES)
+            image_path = chosen
             if not os.path.exists(image_path):
-                # Try in script directory
-                script_dir = os.path.dirname(os.path.abspath(__file__))
-                image_path = os.path.join(script_dir, self.EINK_DISABLED_IMAGE)
+                # Try in bundle/script directory
+                if getattr(sys, 'frozen', False):
+                    base_dir = sys._MEIPASS  # PyInstaller data dir
+                else:
+                    base_dir = os.path.dirname(os.path.abspath(__file__))
+                image_path = os.path.join(base_dir, chosen)
 
             if os.path.exists(image_path):
-                self.log_message(f"Displaying privacy image on {self.DISPLAY_EINK}...")
+                self.log_message(f"Displaying privacy image ({chosen}) on {self.DISPLAY_EINK}...")
                 self.eink_image_process = self.display_mgr.display_fullscreen_image(
                     self.DISPLAY_EINK,
                     image_path
@@ -904,7 +913,7 @@ class EInkControlGUI:
                 else:
                     self.log_message("Warning: Could not display privacy image", level='error')
             else:
-                self.log_message(f"Warning: Privacy image not found: {self.EINK_DISABLED_IMAGE}", level='error')
+                self.log_message(f"Warning: Privacy image not found: {chosen}", level='error')
 
             # Step 4: Disable E-Ink via USB controller
             self.log_message("Disabling E-Ink display via USB controller...")
@@ -1328,10 +1337,33 @@ def show_disclaimer_dialog(parent=None):
         return False
 
 
+def _resolve_helper_path(logger):
+    """Resolve the helper daemon path, checking binary then script locations."""
+    # When running as PyInstaller binary, use the bundle dir for relative paths
+    if getattr(sys, 'frozen', False):
+        base_dir = os.path.dirname(sys.executable)
+    else:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+
+    candidates = [
+        '/usr/local/bin/tinta4plus-helper',                          # Installed binary (symlink)
+        os.path.join(base_dir, 'tinta4plus-helper'),                 # Portable binary (same dir)
+        '/usr/local/bin/HelperDaemon.py',                            # Legacy installed script
+        os.path.join(base_dir, 'HelperDaemon.py'),                   # Dev script (same dir)
+    ]
+
+    for path in candidates:
+        if os.path.exists(path):
+            logger.info(f"Using helper at: {path}")
+            return path
+
+    # Return first candidate as default even if not found yet (will be checked at launch)
+    logger.warning("No helper found at any known location")
+    return candidates[0]
+
+
 def main():
     """Entry point"""
-    HELPER_SCRIPT = '/usr/local/bin/HelperDaemon.py'  # Or use sys.argv[0] relative path
-
     # Setup logging
     log_handlers = [
         logging.StreamHandler(),  # Console output
@@ -1357,14 +1389,7 @@ def main():
 
     sys.excepthook = handle_exception
 
-    # Check if helper script exists
-    if not os.path.exists(HELPER_SCRIPT):
-        # Try relative path
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        alt_helper = os.path.join(script_dir, 'HelperDaemon.py')
-        if os.path.exists(alt_helper):
-            HELPER_SCRIPT = alt_helper
-            logger.info(f"Using helper at: {HELPER_SCRIPT}")
+    HELPER_SCRIPT = _resolve_helper_path(logger)
     
     root = tk.Tk()
     root.withdraw()  # Hide the main window initially
