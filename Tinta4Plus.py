@@ -210,9 +210,11 @@ class EInkControlGUI:
         # close button are always reachable, even on GNOME with its top
         # bar eating vertical space on scaled displays.
         screen_h = self.root.winfo_screenheight()
-        # Reserve space for GNOME top bar (~32px) + window decorations (~40px)
-        win_h = min(700, screen_h - 80)
-        self.root.geometry(f"600x{win_h}")
+        # Reserve generous space for GNOME top bar + window decorations
+        # so the title bar (close/minimize/maximize) is never clipped.
+        win_h = min(650, screen_h - 120)
+        self.root.geometry(f"600x{win_h}+50+50")
+        self.root.minsize(400, 400)
 
         # Helper client
         self.helper = HelperClient(logger)
@@ -583,12 +585,12 @@ class EInkControlGUI:
         self.status_var.set(f"Status: {message}")
     
     def show_error_dialog(self, message):
-        """Show error dialog"""
-        messagebox.showerror("Error", message)
-    
+        """Log error to activity log (non-blocking)"""
+        self.log_message(f"ERROR: {message}", level='error')
+
     def show_info_dialog(self, message):
-        """Show info dialog"""
-        messagebox.showinfo("Information", message)
+        """Log info to activity log (non-blocking)"""
+        self.log_message(message)
     
     def initialize_helper(self):
         """Initialize connection to helper daemon"""
@@ -841,7 +843,7 @@ class EInkControlGUI:
     def execute_helper_command(self, command, **params):
         """Execute a command via helper and handle response"""
         if not self.helper.is_connected():
-            self.show_error_dialog("Not connected to helper daemon")
+            messagebox.showerror("Error", "Not connected to helper daemon.\n\nPlease click 'Connect to Helper' first.")
             return None
 
         try:
@@ -1056,9 +1058,13 @@ class EInkControlGUI:
                 else:
                     self.log_message(f"⚠ Failed to disable E-Ink display on {self.DISPLAY_EINK}", level='error')
 
-                # Step 5b: Wake OLED panel — disabling eDP-2 can trigger
-                # DPMS standby on eDP-1.
+                # Step 5b: Wake and unlock OLED panel — disabling eDP-2
+                # can trigger GNOME to lock/blank the session.
                 self.log_message("Waking OLED panel...")
+                self.display_mgr.wake_display()
+                # Retry after a short delay — the lock can trigger
+                # asynchronously after the display change.
+                time.sleep(1.0)
                 self.display_mgr.wake_display()
 
                 # Step 6: Map touchscreen input back to OLED display

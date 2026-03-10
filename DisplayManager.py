@@ -123,11 +123,14 @@ class DisplayManager:
         return self._disable_display_x11(display_name)
 
     def wake_display(self):
-        """Force the physical panel out of DPMS standby.
+        """Force the physical panel out of DPMS standby and unlock.
 
         On X11 this uses ``xset dpms force on``.
-        On Wayland it deactivates the GNOME screensaver via D-Bus and
-        activates the login session via loginctl.
+        On Wayland it deactivates the GNOME screensaver, unlocks the
+        session, and activates it via loginctl.
+
+        Disabling eDP-2 can cause GNOME to lock the session (as if
+        the lid was closed), so we must both unlock and activate.
         """
         if self.session_type != 'wayland':
             # X11 path
@@ -152,18 +155,22 @@ class DisplayManager:
         except Exception as e:
             self.logger.warning(f"Wayland: GNOME ScreenSaver D-Bus failed: {e}")
 
-        # 2. Activate the login session (works even without a screensaver)
+        # 2. Unlock and activate all login sessions — disabling a display
+        #    can trigger GNOME to lock the session, producing a black screen
+        #    that only flashes content briefly when the lid moves.
         try:
             result = subprocess.run(['loginctl', 'show-user', os.environ.get('USER', ''),
                                      '--property=Sessions', '--value'],
                                     capture_output=True, text=True, timeout=5)
             sessions = result.stdout.strip().split()
             for session in sessions:
+                subprocess.run(['loginctl', 'unlock-session', session],
+                               capture_output=True, timeout=5)
                 subprocess.run(['loginctl', 'activate', session],
                                capture_output=True, timeout=5)
-            self.logger.info("Wayland: activated session via loginctl")
+            self.logger.info("Wayland: unlocked and activated session via loginctl")
         except Exception as e:
-            self.logger.warning(f"Wayland: loginctl activate failed: {e}")
+            self.logger.warning(f"Wayland: loginctl unlock/activate failed: {e}")
 
     def get_display_geometry(self, display_name):
         """Get the geometry (position and size) of a display."""
