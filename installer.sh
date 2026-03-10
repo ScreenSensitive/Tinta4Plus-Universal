@@ -228,19 +228,19 @@ install_deps() {
 
     # Script mode: install pip packages not available in apt
     if [ "$INSTALL_MODE" = "script" ]; then
-        step "Installing Python pip packages (portio, pyusb)"
+        step "Installing Python pip packages (portio, pyusb, sv-ttk)"
         local pip_cmd="pip3"
         if ! command -v pip3 &>/dev/null; then
             apt-get install -y -qq python3-pip >> "$LOG_FILE" 2>&1
         fi
         # Install as system-wide (running as root)
-        if $pip_cmd install --break-system-packages portio pyusb >> "$LOG_FILE" 2>&1; then
+        if $pip_cmd install --break-system-packages portio pyusb sv-ttk >> "$LOG_FILE" 2>&1; then
             info "pip packages installed."
-        elif $pip_cmd install portio pyusb >> "$LOG_FILE" 2>&1; then
+        elif $pip_cmd install portio pyusb sv-ttk >> "$LOG_FILE" 2>&1; then
             info "pip packages installed."
         else
-            warn "pip install failed for portio/pyusb."
-            warn "You will need to run manually: pip3 install portio pyusb"
+            warn "pip install failed for portio/pyusb/sv-ttk."
+            warn "You will need to run manually: pip3 install portio pyusb sv-ttk"
             warn "See: ${LOG_FILE}"
         fi
     fi

@@ -31,6 +31,12 @@ import webbrowser
 import json
 from datetime import datetime
 
+try:
+    import sv_ttk
+    HAS_SV_TTK = True
+except ImportError:
+    HAS_SV_TTK = False
+
 from HelperClient import HelperClient
 from DisplayManager import DisplayManager
 from ThemeManager import ThemeManager
@@ -309,8 +315,11 @@ class EInkControlGUI:
         """Build the tkinter user interface"""
 
         # Configure style
-        style = ttk.Style()
-        style.theme_use('clam')  # Modern look
+        if HAS_SV_TTK:
+            sv_ttk.set_theme("dark")
+        else:
+            style = ttk.Style()
+            style.theme_use('clam')
 
         # Main frame with padding
         main_frame = ttk.Frame(self.root, padding="10")
@@ -479,14 +488,21 @@ class EInkControlGUI:
         row += 1
         
         # Scrolled text widget
-        self.log_text = scrolledtext.ScrolledText(log_frame, height=15, wrap=tk.WORD,
-                                                   state=tk.DISABLED, font=('Courier', 9))
+        log_kwargs = {'height': 15, 'wrap': tk.WORD, 'state': tk.DISABLED, 'font': ('Courier', 9)}
+        if HAS_SV_TTK:
+            log_kwargs.update({'bg': '#1c1c1c', 'fg': '#e0e0e0', 'insertbackground': '#e0e0e0'})
+        self.log_text = scrolledtext.ScrolledText(log_frame, **log_kwargs)
         self.log_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        
+
         # Configure text tags for colored output
-        self.log_text.tag_config('success', foreground='green')
-        self.log_text.tag_config('error', foreground='red')
-        self.log_text.tag_config('info', foreground='blue')
+        if HAS_SV_TTK:
+            self.log_text.tag_config('success', foreground='#57c785')
+            self.log_text.tag_config('error', foreground='#ff6b6b')
+            self.log_text.tag_config('info', foreground='#6bb3ff')
+        else:
+            self.log_text.tag_config('success', foreground='green')
+            self.log_text.tag_config('error', foreground='red')
+            self.log_text.tag_config('info', foreground='blue')
 
         # Version and Buy Me A Coffee button row
         version_coffee_frame = ttk.Frame(main_frame)
@@ -903,6 +919,13 @@ class EInkControlGUI:
                 else:
                     self.log_message(f"⚠ Failed to disable OLED display on {self.DISPLAY_OLED}", level='error')
 
+                # Step 6: Map touchscreen input to E-Ink display
+                self.log_message("Mapping touchscreen input to E-Ink display...")
+                if self.display_mgr.map_touch_to_display(self.DISPLAY_EINK):
+                    self.log_message(f"✓ Touchscreen mapped to {self.DISPLAY_EINK}")
+                else:
+                    self.log_message("⚠ Could not map touchscreen (may auto-map)", level='info')
+
                 # Start periodic refresh timer if configured
                 self._start_refresh_timer()
 
@@ -1013,7 +1036,14 @@ class EInkControlGUI:
                 else:
                     self.log_message(f"⚠ Failed to disable E-Ink display on {self.DISPLAY_EINK}", level='error')
 
-                # Step 6: Switch to Adwaita-dark theme if enabled
+                # Step 6: Map touchscreen input back to OLED display
+                self.log_message("Mapping touchscreen input to OLED display...")
+                if self.display_mgr.map_touch_to_display(self.DISPLAY_OLED):
+                    self.log_message(f"✓ Touchscreen mapped to {self.DISPLAY_OLED}")
+                else:
+                    self.log_message("⚠ Could not map touchscreen (may auto-map)", level='info')
+
+                # Step 7: Switch to Adwaita-dark theme if enabled
                 if self.autoswitch_theme_var.get():
                     self.theme_mgr.set_theme(self.THEME_ADWAITA_DARK)
             else:
@@ -1290,17 +1320,20 @@ def show_disclaimer_dialog(parent=None):
         dialog.destroy()
 
     # Top frame with warning icon and title
-    top_frame = tk.Frame(dialog, bg='white', pady=10)
+    _eula_bg = '#1c1c1c' if HAS_SV_TTK else 'white'
+    _eula_fg = '#e0e0e0' if HAS_SV_TTK else 'black'
+    top_frame = tk.Frame(dialog, bg=_eula_bg, pady=10)
     top_frame.pack(fill=tk.X)
 
     # Warning icon (using text emoji)
     icon_label = tk.Label(top_frame, text="⚠", font=('TkDefaultFont', 48),
-                         bg='white', fg='orange')
+                         bg=_eula_bg, fg='orange')
     icon_label.pack(side=tk.LEFT, padx=20)
 
     # Title
     title_label = tk.Label(top_frame, text="End User License Agreement\n\nPlease read carefully",
-                          font=('TkDefaultFont', 12, 'bold'), bg='white', justify=tk.LEFT)
+                          font=('TkDefaultFont', 12, 'bold'), bg=_eula_bg, fg=_eula_fg,
+                          justify=tk.LEFT)
     title_label.pack(side=tk.LEFT, padx=10)
 
     # Separator
@@ -1320,10 +1353,11 @@ def show_disclaimer_dialog(parent=None):
     text_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
     # Create ScrolledText with vertical scrollbar
-    eula_text = scrolledtext.ScrolledText(text_frame, wrap=tk.WORD,
-                                         font=('TkDefaultFont', 11),
-                                         relief=tk.SUNKEN, bd=2,
-                                         width=1, height=1)  # Dummy size, will expand
+    eula_kwargs = {'wrap': tk.WORD, 'font': ('TkDefaultFont', 11),
+                   'relief': tk.SUNKEN, 'bd': 2, 'width': 1, 'height': 1}
+    if HAS_SV_TTK:
+        eula_kwargs.update({'bg': '#1c1c1c', 'fg': '#e0e0e0', 'insertbackground': '#e0e0e0'})
+    eula_text = scrolledtext.ScrolledText(text_frame, **eula_kwargs)
     eula_text.pack(fill=tk.BOTH, expand=True)
     eula_text.insert('1.0', DISCLAIMER_TEXT)
     eula_text.config(state=tk.DISABLED)  # Make read-only

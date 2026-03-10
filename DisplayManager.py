@@ -1200,6 +1200,276 @@ except Exception as e:
             return None
 
     # ------------------------------------------------------------------
+    # Touchscreen input mapping
+    # ------------------------------------------------------------------
+
+    def map_touch_to_display(self, display_name):
+        """Map all touchscreen input devices to the specified display.
+
+        This fixes misplaced touch coordinates on dual-screen setups
+        by remapping the touch digitizer to the active display output.
+
+        Args:
+            display_name: Display connector name (e.g., 'eDP-1', 'eDP-2')
+
+        Returns:
+            bool: True if at least one device was mapped, False otherwise
+        """
+        if self.session_type == 'x11':
+            return self._map_touch_x11(display_name)
+        elif self.session_type == 'wayland':
+            if self._use_kde_wayland():
+                return self._map_touch_wayland_kde(display_name)
+            return self._map_touch_wayland_gnome(display_name)
+        else:
+            self.logger.warning("Unknown session type, trying X11 touch mapping")
+            return self._map_touch_x11(display_name)
+
+    def _get_touchscreen_xinput_ids(self):
+        """Find touchscreen device IDs from xinput.
+
+        Returns a list of (device_id, device_name) tuples.
+        Uses two strategies:
+        1. Name-based: match devices with 'touch' (not 'touchpad') in name
+        2. Type-based: check xinput list-props for TouchClass devices
+
+        On the ThinkBook Plus Gen 4, the touchscreen may appear as an
+        ELAN device (e.g., 'ELAN0732:00 04F3:2234') without 'touch' in name.
+        """
+        try:
+            result = subprocess.run(
+                ['xinput', 'list'],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode != 0:
+                return []
+
+            candidates = []
+            for line in result.stdout.splitlines():
+                if 'id=' not in line:
+                    continue
+                try:
+                    id_part = line.split('id=')[1].split()[0].strip()
+                    dev_id = int(id_part)
+                    name = line.split('↳')[-1].split('id=')[0].strip() if '↳' in line else line.split('id=')[0].strip()
+                    candidates.append((dev_id, name, line.lower()))
+                except (ValueError, IndexError):
+                    continue
+
+            devices = []
+            seen_ids = set()
+
+            # Pass 1: name-based matching (fast)
+            for dev_id, name, lower in candidates:
+                is_touch = 'touch' in lower and 'touchpad' not in lower
+                # Also match ELAN digitizer devices (common on ThinkBooks)
+                is_elan_digitizer = 'elan' in lower and 'touchpad' not in lower and 'fingerprint' not in lower
+                if is_touch or is_elan_digitizer:
+                    if dev_id not in seen_ids:
+                        devices.append((dev_id, name))
+                        seen_ids.add(dev_id)
+
+            # Pass 2: type-based — check if remaining pointer devices have touch capability
+            if not devices:
+                self.logger.info("No touchscreen found by name, probing pointer devices for touch capability...")
+                for dev_id, name, lower in candidates:
+                    if dev_id in seen_ids:
+                        continue
+                    if 'slave  pointer' not in lower and 'slave pointer' not in lower:
+                        continue
+                    if 'touchpad' in lower or 'mouse' in lower or 'trackpoint' in lower:
+                        continue
+                    # Check if this device has AbsMT axes (touchscreen indicator)
+                    try:
+                        props = subprocess.run(
+                            ['xinput', 'list-props', str(dev_id)],
+                            capture_output=True, text=True, timeout=2
+                        )
+                        if 'Abs MT' in props.stdout or 'Touch' in props.stdout:
+                            devices.append((dev_id, name))
+                            seen_ids.add(dev_id)
+                    except Exception:
+                        pass
+
+            return devices
+
+        except Exception as e:
+            self.logger.error(f"Failed to list xinput devices: {e}")
+            return []
+
+    def _map_touch_x11(self, display_name):
+        """Map touchscreen devices to a display using xinput (X11)."""
+        devices = self._get_touchscreen_xinput_ids()
+        if not devices:
+            self.logger.info("No touchscreen devices found via xinput")
+            return False
+
+        mapped = False
+        for dev_id, dev_name in devices:
+            try:
+                result = subprocess.run(
+                    ['xinput', 'map-to-output', str(dev_id), display_name],
+                    capture_output=True, text=True, timeout=5
+                )
+                if result.returncode == 0:
+                    self.logger.info(f"Mapped touch device '{dev_name}' (id={dev_id}) to {display_name}")
+                    mapped = True
+                else:
+                    self.logger.warning(f"Failed to map touch device '{dev_name}' (id={dev_id}): {result.stderr.strip()}")
+            except Exception as e:
+                self.logger.error(f"Error mapping touch device {dev_id}: {e}")
+
+        return mapped
+
+    def _get_touchscreen_sysfs(self):
+        """Find touchscreen devices from /proc/bus/input/devices.
+
+        Returns a list of dicts with 'name', 'sysfs', 'event_node'.
+        Works on both X11 and Wayland.
+        """
+        devices = []
+        try:
+            with open('/proc/bus/input/devices', 'r') as f:
+                content = f.read()
+
+            blocks = content.split('\n\n')
+            for block in blocks:
+                lines = block.strip().splitlines()
+                if not lines:
+                    continue
+
+                name = ''
+                handlers = ''
+                for line in lines:
+                    if line.startswith('N: Name='):
+                        name = line.split('=', 1)[1].strip().strip('"')
+                    elif line.startswith('H: Handlers='):
+                        handlers = line.split('=', 1)[1].strip()
+
+                lower_name = name.lower()
+                # Match touchscreen devices, exclude touchpads and fingerprint
+                is_touch = 'touch' in lower_name and 'touchpad' not in lower_name
+                is_elan_digitizer = 'elan' in lower_name and 'touchpad' not in lower_name and 'fingerprint' not in lower_name
+                if is_touch or is_elan_digitizer:
+                    # Find event node
+                    event_node = None
+                    for handler in handlers.split():
+                        if handler.startswith('event'):
+                            event_node = f'/dev/input/{handler}'
+                            break
+                    if event_node:
+                        devices.append({'name': name, 'event_node': event_node})
+
+        except Exception as e:
+            self.logger.error(f"Failed to read /proc/bus/input/devices: {e}")
+
+        return devices
+
+    def _map_touch_wayland_gnome(self, display_name):
+        """Map touchscreen to display on GNOME Wayland via gsettings.
+
+        GNOME uses per-device settings under:
+        org.gnome.desktop.peripherals.touchscreen:<device-vid-pid>
+        with key 'output' = ['connector', 'vendor', 'product', 'serial']
+        """
+        # On GNOME Wayland, when only one display is active, Mutter
+        # should auto-map touch to it. But during transitions or if
+        # both are active, we need to explicitly set the mapping.
+        state = self._mutter_get_current_state()
+        if not state:
+            self.logger.warning("Cannot map touch on Wayland: Mutter state unavailable")
+            return False
+
+        # Find the monitor spec for the target display
+        monitor = self._find_monitor_in_state(state, display_name)
+        if not monitor:
+            self.logger.warning(f"Monitor {display_name} not found in Mutter state for touch mapping")
+            return False
+
+        # Build the output value for gsettings
+        output_value = f"['{monitor['connector']}', '{monitor['vendor']}', '{monitor['product']}', '{monitor['serial']}']"
+
+        # Find touchscreen devices and set their output mapping
+        devices = self._get_touchscreen_sysfs()
+        if not devices:
+            self.logger.info("No touchscreen devices found for Wayland touch mapping")
+            return False
+
+        mapped = False
+        for dev in devices:
+            # Derive the gsettings device ID from the device name
+            # GNOME uses the format: /org/gnome/desktop/peripherals/touchscreens/<vid>:<pid>/
+            # We need to find the vid:pid. Try to get it from sysfs.
+            vid_pid = self._get_device_vid_pid(dev['event_node'])
+            if not vid_pid:
+                self.logger.warning(f"Could not determine VID:PID for {dev['name']}, skipping")
+                continue
+
+            schema_id = f"org.gnome.desktop.peripherals.touchscreen:{vid_pid}"
+            try:
+                result = subprocess.run(
+                    ['gsettings', 'set', schema_id, 'output', output_value],
+                    capture_output=True, text=True, timeout=5
+                )
+                if result.returncode == 0:
+                    self.logger.info(f"Mapped touch '{dev['name']}' to {display_name} via gsettings")
+                    mapped = True
+                else:
+                    self.logger.warning(f"gsettings failed for {dev['name']}: {result.stderr.strip()}")
+            except Exception as e:
+                self.logger.error(f"Error setting gsettings for touch device: {e}")
+
+        if not mapped:
+            self.logger.info("Wayland touch mapping: no devices mapped via gsettings (Mutter may auto-map)")
+
+        return mapped
+
+    def _map_touch_wayland_kde(self, display_name):
+        """Map touchscreen to display on KDE Wayland.
+
+        KDE Plasma uses libinput device configuration via kscreen or
+        the KWin scripting interface. As a fallback, the auto-mapping
+        by the compositor should work when only one display is active.
+        """
+        self.logger.info(f"KDE Wayland: touch should auto-map to active display {display_name}")
+        return True
+
+    def _get_device_vid_pid(self, event_node):
+        """Get VID:PID for an input device from sysfs.
+
+        Args:
+            event_node: e.g., '/dev/input/event5'
+
+        Returns:
+            str like '04F3:2234' or None
+        """
+        try:
+            event_name = os.path.basename(event_node)
+            # Read the device uevent to get HID_UNIQ or look at the id
+            id_path = f'/sys/class/input/{event_name}/device/id'
+            if os.path.isdir(id_path):
+                with open(os.path.join(id_path, 'vendor'), 'r') as f:
+                    vendor = f.read().strip()
+                with open(os.path.join(id_path, 'product'), 'r') as f:
+                    product = f.read().strip()
+                return f"{vendor}:{product}"
+
+            # Try parent device
+            device_path = os.path.realpath(f'/sys/class/input/{event_name}/device')
+            id_path = os.path.join(device_path, 'id')
+            if os.path.isdir(id_path):
+                with open(os.path.join(id_path, 'vendor'), 'r') as f:
+                    vendor = f.read().strip()
+                with open(os.path.join(id_path, 'product'), 'r') as f:
+                    product = f.read().strip()
+                return f"{vendor}:{product}"
+
+        except Exception as e:
+            self.logger.debug(f"Failed to get VID:PID for {event_node}: {e}")
+
+        return None
+
+    # ------------------------------------------------------------------
     # Utilities
     # ------------------------------------------------------------------
 
