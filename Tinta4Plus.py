@@ -206,7 +206,11 @@ class EInkControlGUI:
         self.logger = logger
         self.root = root
         self.root.title("ThinkBook E-Ink Control")
-        self.root.geometry("600x700")
+        # Use a shorter default height so the title bar stays reachable
+        # on GNOME (which has a top bar eating vertical space), especially
+        # on scaled displays.  The window is still resizable.
+        self.root.geometry("600x560")
+        self.root.minsize(500, 400)
 
         # Helper client
         self.helper = HelperClient(logger)
@@ -488,7 +492,7 @@ class EInkControlGUI:
         row += 1
         
         # Scrolled text widget
-        log_kwargs = {'height': 15, 'wrap': tk.WORD, 'state': tk.DISABLED, 'font': ('Courier', 9)}
+        log_kwargs = {'height': 8, 'wrap': tk.WORD, 'state': tk.DISABLED, 'font': ('Courier', 9)}
         if HAS_SV_TTK:
             log_kwargs.update({'bg': '#1c1c1c', 'fg': '#e0e0e0', 'insertbackground': '#e0e0e0'})
         self.log_text = scrolledtext.ScrolledText(log_frame, **log_kwargs)
@@ -1045,15 +1049,10 @@ class EInkControlGUI:
                 else:
                     self.log_message(f"⚠ Failed to disable E-Ink display on {self.DISPLAY_EINK}", level='error')
 
-                # Step 5b: Wake OLED panel again — disabling eDP-2 can trigger
-                # another DPMS standby event on eDP-1 under X11.
-                if self.display_mgr.session_type != 'wayland':
-                    try:
-                        import subprocess as _sp
-                        _sp.run(['xset', 'dpms', 'force', 'on'],
-                                capture_output=True, timeout=5)
-                    except Exception:
-                        pass
+                # Step 5b: Wake OLED panel — disabling eDP-2 can trigger
+                # DPMS standby on eDP-1. Works on both X11 and Wayland.
+                self.log_message("Waking OLED panel...")
+                self.display_mgr.wake_display()
 
                 # Step 6: Map touchscreen input back to OLED display
                 self.log_message("Mapping touchscreen input to OLED display...")
@@ -1062,7 +1061,12 @@ class EInkControlGUI:
                 else:
                     self.log_message("⚠ Could not map touchscreen (may auto-map)", level='info')
 
-                # Step 7: Switch to Adwaita-dark theme if enabled
+                # Step 7: Second wake attempt after a delay — the panel
+                # can fall back to standby during the transition.
+                time.sleep(1.0)
+                self.display_mgr.wake_display()
+
+                # Step 8: Switch to Adwaita-dark theme if enabled
                 if self.autoswitch_theme_var.get():
                     self.theme_mgr.set_theme(self.THEME_ADWAITA_DARK)
             else:

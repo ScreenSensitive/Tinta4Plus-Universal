@@ -122,6 +122,59 @@ class DisplayManager:
             return self._disable_display_wayland(display_name)
         return self._disable_display_x11(display_name)
 
+    def wake_display(self):
+        """Force the physical panel out of DPMS standby.
+
+        On X11 this uses ``xset dpms force on``.
+        On GNOME Wayland it deactivates the screensaver and simulates
+        a key press via ``xdotool`` (runs under XWayland) as a fallback.
+        """
+        if self.session_type != 'wayland':
+            # X11 path
+            try:
+                subprocess.run(['xset', 'dpms', 'force', 'on'],
+                               capture_output=True, timeout=5)
+                self.logger.info("X11: sent DPMS force on")
+            except Exception as e:
+                self.logger.warning(f"xset dpms force on failed: {e}")
+            return
+
+        # Wayland / GNOME path — try multiple methods
+        # 1. Deactivate GNOME Screensaver via D-Bus
+        try:
+            subprocess.run(
+                ['gdbus', 'call', '--session',
+                 '--dest', 'org.gnome.ScreenSaver',
+                 '--object-path', '/org/gnome/ScreenSaver',
+                 '--method', 'org.gnome.ScreenSaver.SetActive', 'false'],
+                capture_output=True, timeout=5)
+            self.logger.info("Wayland: deactivated GNOME ScreenSaver")
+        except Exception as e:
+            self.logger.warning(f"Wayland: GNOME ScreenSaver D-Bus failed: {e}")
+
+        # 2. Simulate a harmless key press to trigger user-activity and wake
+        #    the panel. xdotool works under XWayland.
+        try:
+            subprocess.run(['xdotool', 'key', 'shift'],
+                           capture_output=True, timeout=5)
+            self.logger.info("Wayland: sent xdotool key press to wake display")
+        except Exception as e:
+            self.logger.warning(f"Wayland: xdotool wake failed: {e}")
+
+        # 3. Use loginctl to unlock the session (works even without a screensaver)
+        try:
+            # Get the session ID for the current user
+            result = subprocess.run(['loginctl', 'show-user', os.environ.get('USER', ''),
+                                     '--property=Sessions', '--value'],
+                                    capture_output=True, text=True, timeout=5)
+            sessions = result.stdout.strip().split()
+            for session in sessions:
+                subprocess.run(['loginctl', 'activate', session],
+                               capture_output=True, timeout=5)
+            self.logger.info("Wayland: activated session via loginctl")
+        except Exception as e:
+            self.logger.warning(f"Wayland: loginctl activate failed: {e}")
+
     def get_display_geometry(self, display_name):
         """Get the geometry (position and size) of a display."""
         if self._use_kde_wayland():
