@@ -533,6 +533,10 @@ class EInkControlGUI:
         self.root.bind_all('<F5>', lambda e: self.on_refresh_full() if self.eink_enabled_var.get() else None)
         self.root.bind_all('<Control-r>', lambda e: self.on_refresh_full() if self.eink_enabled_var.get() else None)
 
+        # Map brightness keys to frontlight control when in eInk mode
+        self.root.bind_all('<XF86MonBrightnessUp>', self._on_brightness_key_up)
+        self.root.bind_all('<XF86MonBrightnessDown>', self._on_brightness_key_down)
+
         # Initial log message
         self.log_message("Application started")
     
@@ -1117,6 +1121,30 @@ class EInkControlGUI:
             self.update_status(f"Brightness set to {level}")
 
         self.brightness_timer = None
+
+    def _on_brightness_key_up(self, event):
+        """Handle XF86MonBrightnessUp — step frontlight up when in eInk mode"""
+        if not self.eink_enabled_var.get():
+            return
+        current = self.brightness_var.get()
+        if current < 8:
+            new_level = current + 1
+            self.brightness_var.set(new_level)
+            self.brightness_label.config(text=str(new_level))
+            self._set_brightness(new_level)
+        return "break"
+
+    def _on_brightness_key_down(self, event):
+        """Handle XF86MonBrightnessDown — step frontlight down when in eInk mode"""
+        if not self.eink_enabled_var.get():
+            return
+        current = self.brightness_var.get()
+        if current > 0:
+            new_level = current - 1
+            self.brightness_var.set(new_level)
+            self.brightness_label.config(text=str(new_level))
+            self._set_brightness(new_level)
+        return "break"
 
     def on_scale_changed(self, value):
         """Handle display scale slider change"""
