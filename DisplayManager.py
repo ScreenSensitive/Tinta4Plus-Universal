@@ -766,7 +766,6 @@ except Exception as e:
 
         # Build the logical monitors config: keep all existing + add the new one
         logical_configs = []
-        next_x = 0
 
         # Collect existing logical monitors (excluding any that already have this connector)
         for lm in state.get('logical_monitors', []):
@@ -793,13 +792,12 @@ except Exception as e:
                     'primary': lm['primary'],
                     'monitors': lm_monitors_spec,
                 })
-                edge = lm['x'] + self._logical_width(lm, state)
-                if edge > next_x:
-                    next_x = edge
 
-        # Add the new display to the right
+        # Place the new display at (0, 0) so it overlaps existing monitors
+        # (mirror-like). The OLED will be disabled shortly after, so this
+        # avoids a visible extended-desktop state on the eInk.
         logical_configs.append({
-            'x': next_x, 'y': 0,
+            'x': 0, 'y': 0,
             'scale': mutter_scale,
             'transform': 0,
             'primary': False,
