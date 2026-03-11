@@ -206,7 +206,7 @@ install_deps() {
 
     case "$DE" in
         gnome|cinnamon)
-            pkgs="$pkgs gnome-themes-extra"
+            pkgs="$pkgs gnome-themes-extra policykit-1-gnome"
             ;;
         kde)
             pkgs="$pkgs kscreen plasma-workspace"
