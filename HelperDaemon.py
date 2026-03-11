@@ -29,7 +29,8 @@ import logging
 
 from WatchdogTimer import WatchdogTimer
 from ECController import ECController
-from EInkUSBController import EInkUSBController 
+from EInkUSBController import EInkUSBController
+from GlobalHotkeyListener import GlobalHotkeyListener
 
 # Configuration
 SOCKET_PATH = '/tmp/tinta4plusu.sock'
@@ -51,7 +52,21 @@ class HelperDaemon:
         # Hardware controllers
         self.eink = None
         self.ec = None
-        
+
+        # eInk state tracking (for global hotkeys)
+        self.eink_enabled = False
+        self.brightness_level = 4  # default
+        self._pending_notifications = []
+        self._notify_lock = threading.Lock()
+
+        # Global hotkey listener
+        self.hotkey_listener = GlobalHotkeyListener(
+            self.logger,
+            on_brightness_up=self._hotkey_brightness_up,
+            on_brightness_down=self._hotkey_brightness_down,
+            on_refresh=self._hotkey_refresh,
+        )
+
         # Watchdog
         self.watchdog = WatchdogTimer(WATCHDOG_TIMEOUT, self.shutdown, self.logger)
         
@@ -139,6 +154,64 @@ class HelperDaemon:
             self.eink.disconnect()
         self.logger.info("Hardware cleanup complete")
     
+    # ------------------------------------------------------------------
+    # Global hotkey callbacks (called from evdev listener thread)
+    # ------------------------------------------------------------------
+
+    def _queue_notification(self, notif):
+        """Queue a notification for the GUI to pick up on next keepalive."""
+        with self._notify_lock:
+            self._pending_notifications.append(notif)
+
+    def _drain_notifications(self):
+        """Return and clear all pending notifications."""
+        with self._notify_lock:
+            notifs = self._pending_notifications[:]
+            self._pending_notifications.clear()
+        return notifs
+
+    def _hotkey_brightness_up(self):
+        """Handle global brightness-up key."""
+        if not self.eink_enabled:
+            return
+        if self.brightness_level < 8:
+            new_level = self.brightness_level + 1
+            try:
+                if self.ec and self.ec.access_available:
+                    self.ec.set_brightness(new_level)
+                    self.brightness_level = new_level
+                    self.logger.info(f"Hotkey: brightness up → {new_level}")
+                    self._queue_notification({'type': 'brightness', 'level': new_level})
+            except Exception as e:
+                self.logger.error(f"Hotkey brightness up error: {e}")
+
+    def _hotkey_brightness_down(self):
+        """Handle global brightness-down key."""
+        if not self.eink_enabled:
+            return
+        if self.brightness_level > 0:
+            new_level = self.brightness_level - 1
+            try:
+                if self.ec and self.ec.access_available:
+                    self.ec.set_brightness(new_level)
+                    self.brightness_level = new_level
+                    self.logger.info(f"Hotkey: brightness down → {new_level}")
+                    self._queue_notification({'type': 'brightness', 'level': new_level})
+            except Exception as e:
+                self.logger.error(f"Hotkey brightness down error: {e}")
+
+    def _hotkey_refresh(self):
+        """Handle global refresh key (F5/F9)."""
+        if not self.eink_enabled:
+            return
+        try:
+            if self.eink:
+                self.eink.refresh_full()
+                self.logger.info("Hotkey: eInk refresh")
+                self._queue_notification({'type': 'refresh'})
+        except Exception as e:
+            self.logger.error(f"Hotkey refresh error: {e}")
+
     def handle_command(self, command_data):
         """Process a command and return response"""
         try:
@@ -156,14 +229,20 @@ class HelperDaemon:
                 # Simple keepalive/ping command
                 response['success'] = True
                 response['message'] = 'pong'
+                # Attach any pending hotkey notifications
+                notifs = self._drain_notifications()
+                if notifs:
+                    response['notifications'] = notifs
             
             elif cmd == 'enable-eink':
                 self.eink.enable_eink()
+                self.eink_enabled = True
                 response['success'] = True
                 response['message'] = 'E-Ink display enabled'
 
             elif cmd == 'disable-eink':
                 self.eink.disable_eink()
+                self.eink_enabled = False
                 response['success'] = True
                 response['message'] = 'E-Ink display disabled'
             
@@ -234,6 +313,8 @@ class HelperDaemon:
                     raise ValueError("Missing 'level' parameter")
 
                 success, readback = self.ec.set_brightness(int(level))
+                if success:
+                    self.brightness_level = int(level)
                 response['success'] = success
                 response['readback'] = f"0x{readback:02x}"
                 response['level'] = level
@@ -320,6 +401,9 @@ class HelperDaemon:
                 self.logger.error("Failed to initialize hardware")
                 return 1
             
+            # Start global hotkey listener
+            self.hotkey_listener.start()
+
             # Create socket
             self._create_socket()
             
@@ -370,7 +454,10 @@ class HelperDaemon:
         
         # Cancel watchdog
         self.watchdog.cancel()
-        
+
+        # Stop hotkey listener
+        self.hotkey_listener.stop()
+
         # Cleanup
         self.cleanup_hardware()
         self._remove_socket()

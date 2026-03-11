@@ -199,9 +199,9 @@ install_deps() {
 
     # Python scripts need the full Python stack
     if [ "$INSTALL_MODE" = "script" ]; then
-        pkgs="$pkgs python3 python3-tk python3-usb"
+        pkgs="$pkgs python3 python3-tk python3-usb python3-evdev"
     else
-        pkgs="$pkgs python3-tk"
+        pkgs="$pkgs python3-tk python3-evdev"
     fi
 
     case "$DE" in
@@ -348,6 +348,7 @@ install_script() {
         ECController.py
         EInkUSBController.py
         WatchdogTimer.py
+        GlobalHotkeyListener.py
     )
 
     local copy_failed=false

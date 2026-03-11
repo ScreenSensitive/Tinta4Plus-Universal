@@ -13,6 +13,7 @@ a = Analysis(
         'ECController',
         'EInkUSBController',
         'WatchdogTimer',
+        'GlobalHotkeyListener',
     ],
     hookspath=[],
     hooksconfig={},

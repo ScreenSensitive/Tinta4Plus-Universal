@@ -729,7 +729,11 @@ class EInkControlGUI:
                 self.log_message("Keepalive failed, restarting helper...", level='error')
                 self.attempt_helper_restart()
                 return
-            
+
+            # Process any hotkey notifications from the helper
+            for notif in response.get('notifications', []):
+                self._handle_hotkey_notification(notif)
+
             # Schedule next keepalive
             self.keepalive_after_id = self.root.after(
                 int(self.KEEPALIVE_INTERVAL * 1000),
@@ -742,6 +746,18 @@ class EInkControlGUI:
             self.log_message(f"ERROR: Lost connection to helper - {e}", level='error')
             self.attempt_helper_restart()
     
+    def _handle_hotkey_notification(self, notif):
+        """Process a hotkey notification received from the helper daemon."""
+        ntype = notif.get('type')
+        if ntype == 'brightness':
+            level = notif.get('level')
+            if level is not None:
+                self.brightness_var.set(level)
+                self.brightness_label.config(text=str(level))
+                self.log_message(f"Hotkey: brightness set to {level}")
+        elif ntype == 'refresh':
+            self.log_message("Hotkey: eInk refresh performed")
+
     def attempt_helper_restart(self):
         """Attempt to restart the helper daemon"""
         # Cancel any existing keepalive
