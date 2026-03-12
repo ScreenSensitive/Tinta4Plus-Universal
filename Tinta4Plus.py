@@ -965,7 +965,9 @@ class EInkControlGUI:
             else:
                 self.log_message(f"⚠ Failed to enable E-Ink display on {self.DISPLAY_EINK}", level='error')
 
-            # Small delay to ensure display is fully enabled
+            # Let the event loop process display-change events before
+            # continuing, so the compositor/X server state stays in sync.
+            self.root.update_idletasks()
             time.sleep(1.0)
 
             # Step 2: Enable E-Ink via USB TCON controller
@@ -1008,6 +1010,22 @@ class EInkControlGUI:
                     self.log_message(f"✓ OLED display ({self.DISPLAY_OLED}) disabled")
                 else:
                     self.log_message(f"⚠ Failed to disable OLED display on {self.DISPLAY_OLED}", level='error')
+
+                # Let the event loop process display-change events from the
+                # compositor / X server before continuing.  Without this,
+                # tkinter can't respond to surface-reconfigure events and
+                # the window may end up in a stale input state on Wayland.
+                self.root.update_idletasks()
+
+                # Step 5b: Re-apply eInk display config now that it is the
+                # sole active output.  On X11, overlapping two outputs at
+                # (0,0) with --panning can leave the panning viewport in a
+                # broken state after the other output is disabled — the
+                # pointer moves but clicks land in a dead zone.  Re-applying
+                # forces xrandr to recalculate panning for the single output.
+                time.sleep(0.3)
+                self.display_mgr.enable_display(self.DISPLAY_EINK, scale=self.display_scale)
+                self.root.update_idletasks()
 
                 # Step 6: Map touchscreen input to E-Ink display
                 self.log_message("Mapping touchscreen input to E-Ink display...")
@@ -1137,6 +1155,13 @@ class EInkControlGUI:
                     self.log_message(f"✓ E-Ink display ({self.DISPLAY_EINK}) disabled")
                 else:
                     self.log_message(f"⚠ Failed to disable E-Ink display on {self.DISPLAY_EINK}", level='error')
+
+                self.root.update_idletasks()
+
+                # Re-apply OLED config as sole output (same fix as eInk path)
+                time.sleep(0.3)
+                self.display_mgr.enable_display(self.DISPLAY_OLED, scale=restore_scale)
+                self.root.update_idletasks()
 
                 # Step 5b: Wake and unlock OLED panel — disabling eDP-2
                 # can trigger GNOME to lock/blank the session.
