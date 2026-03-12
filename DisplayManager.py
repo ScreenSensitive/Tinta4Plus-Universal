@@ -1601,6 +1601,124 @@ except Exception as e:
         return None
 
     # ------------------------------------------------------------------
+    # Keyboard layout save / restore
+    # ------------------------------------------------------------------
+
+    def get_keyboard_layout(self):
+        """Get the current keyboard layout configuration.
+
+        Returns a dict with the layout info, or None on failure.
+        Supports GNOME/Cinnamon (gsettings), XFCE (xfconf), KDE, and
+        falls back to setxkbmap for X11.
+        """
+        try:
+            if self.desktop_env in ('gnome', 'cinnamon'):
+                result = subprocess.run(
+                    ['gsettings', 'get', 'org.gnome.desktop.input-sources', 'sources'],
+                    capture_output=True, text=True, timeout=5
+                )
+                if result.returncode == 0:
+                    return {'backend': 'gsettings', 'sources': result.stdout.strip()}
+
+            if self.desktop_env == 'xfce':
+                result = subprocess.run(
+                    ['xfconf-query', '-c', 'keyboard-layout', '-p', '/Default/XkbLayout'],
+                    capture_output=True, text=True, timeout=5
+                )
+                if result.returncode == 0:
+                    layout = result.stdout.strip()
+                    variant_result = subprocess.run(
+                        ['xfconf-query', '-c', 'keyboard-layout', '-p', '/Default/XkbVariant'],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    variant = variant_result.stdout.strip() if variant_result.returncode == 0 else ''
+                    return {'backend': 'xfce', 'layout': layout, 'variant': variant}
+
+            if self.desktop_env == 'kde':
+                result = subprocess.run(
+                    ['setxkbmap', '-query'],
+                    capture_output=True, text=True, timeout=5
+                )
+                if result.returncode == 0:
+                    info = {}
+                    for line in result.stdout.strip().split('\n'):
+                        if ':' in line:
+                            key, val = line.split(':', 1)
+                            info[key.strip()] = val.strip()
+                    return {'backend': 'setxkbmap', **info}
+
+            # Fallback: setxkbmap for X11
+            if self.session_type == 'x11':
+                result = subprocess.run(
+                    ['setxkbmap', '-query'],
+                    capture_output=True, text=True, timeout=5
+                )
+                if result.returncode == 0:
+                    info = {}
+                    for line in result.stdout.strip().split('\n'):
+                        if ':' in line:
+                            key, val = line.split(':', 1)
+                            info[key.strip()] = val.strip()
+                    return {'backend': 'setxkbmap', **info}
+
+        except Exception as e:
+            self.logger.warning(f"Failed to get keyboard layout: {e}")
+
+        return None
+
+    def restore_keyboard_layout(self, saved_layout):
+        """Restore a previously saved keyboard layout.
+
+        Args:
+            saved_layout: dict returned by get_keyboard_layout()
+        """
+        if not saved_layout:
+            return
+
+        try:
+            backend = saved_layout.get('backend')
+
+            if backend == 'gsettings':
+                sources = saved_layout.get('sources', '')
+                if sources:
+                    subprocess.run(
+                        ['gsettings', 'set', 'org.gnome.desktop.input-sources',
+                         'sources', sources],
+                        capture_output=True, timeout=5
+                    )
+                    self.logger.info(f"Restored keyboard layout via gsettings: {sources}")
+
+            elif backend == 'xfce':
+                layout = saved_layout.get('layout', '')
+                variant = saved_layout.get('variant', '')
+                if layout:
+                    subprocess.run(
+                        ['xfconf-query', '-c', 'keyboard-layout',
+                         '-p', '/Default/XkbLayout', '-s', layout],
+                        capture_output=True, timeout=5
+                    )
+                    if variant:
+                        subprocess.run(
+                            ['xfconf-query', '-c', 'keyboard-layout',
+                             '-p', '/Default/XkbVariant', '-s', variant],
+                            capture_output=True, timeout=5
+                        )
+                    self.logger.info(f"Restored keyboard layout via xfce: {layout} {variant}")
+
+            elif backend == 'setxkbmap':
+                layout = saved_layout.get('layout', '')
+                variant = saved_layout.get('variant', '')
+                if layout:
+                    cmd = ['setxkbmap', '-layout', layout]
+                    if variant:
+                        cmd.extend(['-variant', variant])
+                    subprocess.run(cmd, capture_output=True, timeout=5)
+                    self.logger.info(f"Restored keyboard layout via setxkbmap: {layout} {variant}")
+
+        except Exception as e:
+            self.logger.warning(f"Failed to restore keyboard layout: {e}")
+
+    # ------------------------------------------------------------------
     # Utilities
     # ------------------------------------------------------------------
 

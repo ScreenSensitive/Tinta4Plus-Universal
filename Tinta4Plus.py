@@ -246,6 +246,13 @@ class EInkControlGUI:
         # Sleep inhibitor file descriptor (systemd-inhibit)
         self._sleep_inhibit_fd = None
 
+        # Saved keyboard layout (restored after eInk toggle and resume)
+        self.saved_keyboard_layout = None
+
+        # Resume monitor thread
+        self._resume_monitor_thread = None
+        self._resume_monitor_stop = threading.Event()
+
         # Load settings from file (or use defaults)
         settings = self.load_settings()
 
@@ -266,6 +273,14 @@ class EInkControlGUI:
 
         # Set up window close handler
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+
+        # Save the initial keyboard layout so we can restore it after resume
+        self.saved_keyboard_layout = self.display_mgr.get_keyboard_layout()
+        if self.saved_keyboard_layout:
+            self.logger.info(f"Saved initial keyboard layout: {self.saved_keyboard_layout}")
+
+        # Start monitoring for system resume (lid open / wake from suspend)
+        self._start_resume_monitor()
 
         if autostart:
             # Autostart mode: don't launch helper immediately (avoids password prompt at login)
@@ -985,6 +1000,15 @@ class EInkControlGUI:
             except Exception as e:
                 self.logger.warning(f"Failed to save OLED scale: {e}")
 
+            # Save keyboard layout before display switch
+            try:
+                kb = self.display_mgr.get_keyboard_layout()
+                if kb:
+                    self.saved_keyboard_layout = kb
+                    self.log_message(f"Saved keyboard layout: {kb}")
+            except Exception as e:
+                self.logger.warning(f"Failed to save keyboard layout: {e}")
+
             # Step 0: Switch to High Contrast theme if enabled
             if self.autoswitch_theme_var.get():
                 self.theme_mgr.set_theme(self.THEME_HIGH_CONTRAST)
@@ -1214,6 +1238,12 @@ class EInkControlGUI:
                 if self.autoswitch_theme_var.get():
                     self.theme_mgr.set_theme(self.THEME_ADWAITA_DARK)
 
+                # Step 8: Restore keyboard layout (display switching can reset it)
+                if self.saved_keyboard_layout:
+                    self.log_message("Restoring keyboard layout...")
+                    self.display_mgr.restore_keyboard_layout(self.saved_keyboard_layout)
+                    self.log_message("✓ Keyboard layout restored")
+
                 # Display switch complete — allow sleep again
                 self._uninhibit_sleep()
             else:
@@ -1402,6 +1432,128 @@ class EInkControlGUI:
             self.logger.error(f"Failed to open browser: {e}")
             self.log_message(f"Failed to open browser: {e}", level='error')
 
+    def _start_resume_monitor(self):
+        """Start a background thread that listens for system resume events.
+
+        Uses systemd-logind PrepareForSleep D-Bus signal to detect when the
+        system wakes from suspend (e.g. lid open).  On resume, if eInk is
+        not active, re-enforce OLED-only display state and restore the
+        keyboard layout.
+        """
+        self._resume_monitor_stop.clear()
+        self._resume_monitor_thread = threading.Thread(
+            target=self._resume_monitor_loop, daemon=True,
+            name='resume-monitor')
+        self._resume_monitor_thread.start()
+
+    def _resume_monitor_loop(self):
+        """Background loop: listen for PrepareForSleep(false) from logind."""
+        try:
+            import dbus
+            from dbus.mainloop.glib import DBusGMainLoop
+            from gi.repository import GLib
+        except ImportError:
+            self.logger.warning("Resume monitor: dbus/GLib not available, falling back to poll")
+            self._resume_monitor_poll()
+            return
+
+        try:
+            DBusGMainLoop(set_as_default=True)
+            bus = dbus.SystemBus()
+
+            bus.add_signal_receiver(
+                self._on_prepare_for_sleep,
+                signal_name='PrepareForSleep',
+                dbus_interface='org.freedesktop.login1.Manager',
+                bus_name='org.freedesktop.login1'
+            )
+
+            self._glib_loop = GLib.MainLoop()
+            self.logger.info("Resume monitor started (D-Bus PrepareForSleep)")
+
+            # Run until stop is requested
+            context = self._glib_loop.get_context()
+            while not self._resume_monitor_stop.is_set():
+                context.iteration(True)
+
+        except Exception as e:
+            self.logger.warning(f"Resume monitor D-Bus setup failed: {e}, falling back to poll")
+            self._resume_monitor_poll()
+
+    def _resume_monitor_poll(self):
+        """Fallback resume monitor using /sys/power/wakeup_count polling."""
+        self.logger.info("Resume monitor started (poll fallback)")
+        try:
+            with open('/sys/power/wakeup_count', 'r') as f:
+                last_count = f.read().strip()
+        except Exception:
+            self.logger.warning("Resume monitor: cannot read wakeup_count, monitor disabled")
+            return
+
+        while not self._resume_monitor_stop.is_set():
+            self._resume_monitor_stop.wait(3.0)
+            if self._resume_monitor_stop.is_set():
+                break
+            try:
+                with open('/sys/power/wakeup_count', 'r') as f:
+                    count = f.read().strip()
+                if count != last_count:
+                    last_count = count
+                    self.logger.info("Resume detected (wakeup_count changed)")
+                    self._on_system_resume()
+            except Exception:
+                pass
+
+    def _on_prepare_for_sleep(self, going_to_sleep):
+        """D-Bus signal handler for PrepareForSleep.
+
+        Args:
+            going_to_sleep: True when entering suspend, False when resuming.
+        """
+        if not going_to_sleep:
+            self.logger.info("System resumed from suspend (PrepareForSleep=false)")
+            # Small delay to let the display subsystem stabilise
+            time.sleep(2.0)
+            self._on_system_resume()
+
+    def _on_system_resume(self):
+        """Called after the system wakes from suspend / lid open.
+
+        If eInk is not supposed to be active, re-enforce OLED-only state
+        (disable eDP-2, reset panning) and restore the keyboard layout.
+        """
+        try:
+            if self.eink_enabled_var.get():
+                self.logger.info("Resume: eInk is active, skipping display fix-up")
+                return
+
+            self.logger.info("Resume: eInk not active — enforcing OLED-only state")
+
+            # Check if eDP-2 got re-enabled by the system
+            if self.display_mgr.is_display_active(self.DISPLAY_EINK):
+                self.logger.info("Resume: eDP-2 is unexpectedly active, disabling it")
+                self.display_mgr.disable_display(self.DISPLAY_EINK)
+                time.sleep(0.5)
+
+                # Re-apply OLED as sole output with saved scale
+                restore_scale = self.saved_oled_scale if self.saved_oled_scale else 1.0
+                self.display_mgr.enable_display(self.DISPLAY_OLED, scale=restore_scale)
+                self.logger.info(f"Resume: re-applied OLED with scale {restore_scale}")
+
+                # Log to GUI (schedule on main thread)
+                self.root.after(0, lambda: self.log_message(
+                    "↻ Fixed display after resume: disabled eDP-2, restored OLED"))
+
+            # Restore keyboard layout
+            if self.saved_keyboard_layout:
+                self.display_mgr.restore_keyboard_layout(self.saved_keyboard_layout)
+                self.logger.info("Resume: keyboard layout restored")
+                self.root.after(0, lambda: self.log_message(
+                    "↻ Keyboard layout restored after resume"))
+
+        except Exception as e:
+            self.logger.error(f"Resume fix-up failed: {e}")
+
     def on_closing(self):
         """Handle window close"""
         self.logger.info("Application closing")
@@ -1416,6 +1568,14 @@ class EInkControlGUI:
             self.on_eink_toggled(skip_countdown=True)
 
             self.log_message("✓ Automatic switch to OLED completed")
+
+        # Stop resume monitor
+        self._resume_monitor_stop.set()
+        if hasattr(self, '_glib_loop') and self._glib_loop:
+            try:
+                self._glib_loop.quit()
+            except Exception:
+                pass
 
         # Release sleep inhibitor if still held
         self._uninhibit_sleep()
