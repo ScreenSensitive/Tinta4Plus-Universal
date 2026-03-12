@@ -26,6 +26,7 @@ import struct
 import signal
 import threading
 import logging
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 from WatchdogTimer import WatchdogTimer
 from ECController import ECController
@@ -36,7 +37,52 @@ from GlobalHotkeyListener import GlobalHotkeyListener
 SOCKET_PATH = '/tmp/tinta4plusu.sock'
 PID_FILE = '/tmp/tinta4plusu.pid'
 WATCHDOG_TIMEOUT = 20.0  # seconds
+HTTP_PORT = 19849  # localhost HTTP API for browser extensions (e.g. PageTurn)
 LOG_LEVEL = logging.DEBUG  # Changed to DEBUG for detailed EC port access logging
+
+
+def _make_http_handler(daemon):
+    """Create an HTTP request handler bound to the given daemon instance."""
+
+    class _Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            if self.path == '/refresh-eink':
+                try:
+                    if daemon.eink and daemon.eink_enabled:
+                        daemon.eink.refresh_full()
+                        daemon.logger.info("HTTP API: eInk refresh")
+                        self._respond(200, {'success': True, 'message': 'E-Ink refreshed'})
+                    else:
+                        self._respond(503, {'success': False, 'error': 'eInk not enabled'})
+                except Exception as e:
+                    daemon.logger.error(f"HTTP API refresh error: {e}")
+                    self._respond(500, {'success': False, 'error': str(e)})
+            else:
+                self._respond(404, {'error': 'not found'})
+
+        def do_OPTIONS(self):
+            # CORS preflight
+            self.send_response(204)
+            self._cors_headers()
+            self.end_headers()
+
+        def _respond(self, code, body):
+            self.send_response(code)
+            self._cors_headers()
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps(body).encode())
+
+        def _cors_headers(self):
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.send_header('Access-Control-Allow-Methods', 'POST, OPTIONS')
+            self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+
+        def log_message(self, fmt, *args):
+            # Silence default stderr logging; we use our own logger
+            pass
+
+    return _Handler
 
 
 class HelperDaemon:
@@ -58,6 +104,9 @@ class HelperDaemon:
         self.brightness_level = 4  # default
         self._pending_notifications = []
         self._notify_lock = threading.Lock()
+
+        # HTTP API server (for browser extensions like PageTurn)
+        self.http_server = None
 
         # Global hotkey listener
         self.hotkey_listener = GlobalHotkeyListener(
@@ -404,6 +453,16 @@ class HelperDaemon:
             # Start global hotkey listener
             self.hotkey_listener.start()
 
+            # Start HTTP API server for browser extensions
+            try:
+                handler = _make_http_handler(self)
+                self.http_server = HTTPServer(('127.0.0.1', HTTP_PORT), handler)
+                http_thread = threading.Thread(target=self.http_server.serve_forever, daemon=True)
+                http_thread.start()
+                self.logger.info(f"HTTP API listening on http://127.0.0.1:{HTTP_PORT}")
+            except Exception as e:
+                self.logger.warning(f"Failed to start HTTP API server: {e}")
+
             # Create socket
             self._create_socket()
             
@@ -457,6 +516,10 @@ class HelperDaemon:
 
         # Stop hotkey listener
         self.hotkey_listener.stop()
+
+        # Stop HTTP API server
+        if self.http_server:
+            self.http_server.shutdown()
 
         # Cleanup
         self.cleanup_hardware()
