@@ -261,6 +261,8 @@ class EInkControlGUI:
         self.refresh_period_var.set(settings['refresh_period'])
         self.refresh_period_label.config(text=str(settings['refresh_period']))
         self.autoswitch_theme_var.set(settings['autoswitch_theme'])
+        self.flip_countdown = settings['flip_countdown']
+        self._countdown_active = False
 
         # Set up window close handler
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
@@ -280,7 +282,8 @@ class EInkControlGUI:
         defaults = {
             'display_scale': 1.75,
             'refresh_period': 0,
-            'autoswitch_theme': True
+            'autoswitch_theme': True,
+            'flip_countdown': 5
         }
 
         if not os.path.exists(self.SETTINGS_FILE):
@@ -313,7 +316,8 @@ class EInkControlGUI:
             settings = {
                 'display_scale': self.display_scale,
                 'refresh_period': self.refresh_period_var.get(),
-                'autoswitch_theme': self.autoswitch_theme_var.get()
+                'autoswitch_theme': self.autoswitch_theme_var.get(),
+                'flip_countdown': self.flip_countdown
             }
 
             # Write to file
@@ -930,8 +934,35 @@ class EInkControlGUI:
     
     # === Event Handlers ===
     
-    def on_eink_toggled(self):
-        """Handle E-Ink display toggle with automatic eDP switching"""
+    def on_eink_toggled(self, skip_countdown=False):
+        """Handle E-Ink display toggle with flip countdown."""
+        if self._countdown_active:
+            self.log_message("Switch already in progress...", level='warning')
+            return
+
+        countdown = self.flip_countdown if not skip_countdown else 0
+        if countdown > 0:
+            direction = "eInk" if not self.eink_enabled_var.get() else "OLED"
+            self.log_message(f"Flip your screen to {direction} now!")
+            self._countdown_active = True
+            self.eink_toggle_btn.config(state='disabled')
+            self._run_countdown(countdown)
+        else:
+            self._do_eink_toggle()
+
+    def _run_countdown(self, remaining):
+        """Tick the flip countdown, then perform the switch."""
+        if remaining > 0:
+            self.log_message(f"Switching in {remaining}...")
+            self.eink_toggle_btn.config(text=f"Flip now... {remaining}")
+            self.root.after(1000, self._run_countdown, remaining - 1)
+        else:
+            self._countdown_active = False
+            self.eink_toggle_btn.config(state='normal')
+            self._do_eink_toggle()
+
+    def _do_eink_toggle(self):
+        """Perform the actual E-Ink display toggle."""
         enabled = self.eink_enabled_var.get()
         # Toggle the state
         enabled = not enabled
@@ -1382,7 +1413,7 @@ class EInkControlGUI:
             self.logger.info("eInk active at exit - automatically switching to OLED")
 
             # Trigger the toggle to switch back to OLED (this will display privacy image)
-            self.on_eink_toggled()
+            self.on_eink_toggled(skip_countdown=True)
 
             self.log_message("✓ Automatic switch to OLED completed")
 
