@@ -40,6 +40,7 @@ except ImportError:
 from HelperClient import HelperClient
 from DisplayManager import DisplayManager
 from ThemeManager import ThemeManager
+from ResumeCheck import ResumeCheck
 
 class FloatingRefreshButton:
     """Floating refresh button window that stays on top"""
@@ -283,6 +284,10 @@ class EInkControlGUI:
 
         # Start monitoring for system resume (lid open / wake from suspend)
         self._start_resume_monitor()
+
+        # Run startup display/input validation after a short delay
+        # (gives the display subsystem time to settle after login)
+        self.root.after(3000, self._run_startup_check)
 
         if autostart:
             # Autostart mode: don't launch helper immediately (avoids password prompt at login)
@@ -1448,6 +1453,38 @@ class EInkControlGUI:
             self.logger.error(f"Failed to open browser: {e}")
             self.log_message(f"Failed to open browser: {e}", level='error')
 
+    def _run_startup_check(self):
+        """Run post-login display/input validation on a background thread.
+
+        Called once at startup (after a 3s delay) to catch display issues
+        from login, reboot, or hibernate — before the user interacts.
+        """
+        def _check():
+            try:
+                # At startup we always expect OLED (eink_enabled_var defaults
+                # to False). If the user had eInk active before a reboot,
+                # the helper isn't connected yet so we can't know — default
+                # to OLED per user preference.
+                checker = ResumeCheck(self.display_mgr, self.logger)
+                results = checker.run(
+                    expect_eink=False,
+                    saved_oled_scale=self.saved_oled_scale,
+                    saved_keyboard_layout=self.saved_keyboard_layout)
+
+                fixes = [r for r in results
+                         if r.startswith("Fixed:") or r.startswith("Warning:")]
+                if fixes:
+                    summary = "; ".join(fixes)
+                    self.root.after(0, lambda s=summary: self.log_message(
+                        f"Startup check: {s}"))
+                else:
+                    self.logger.info("Startup check: all OK")
+            except Exception as e:
+                self.logger.error(f"Startup check failed: {e}")
+
+        threading.Thread(target=_check, daemon=True,
+                         name='startup-check').start()
+
     def _start_resume_monitor(self):
         """Start a background thread that listens for system resume events.
 
@@ -1535,37 +1572,29 @@ class EInkControlGUI:
     def _on_system_resume(self):
         """Called after the system wakes from suspend / lid open.
 
-        If eInk is not supposed to be active, re-enforce OLED-only state
-        (disable eDP-2, reset panning) and restore the keyboard layout.
+        Runs comprehensive display and input validation via ResumeCheck.
+        Fixes extended-desktop bugs, wrong-display states, resolution
+        mismatches, keyboard layout drift, and touch mapping.
         """
         try:
-            if self.eink_enabled_var.get():
-                self.logger.info("Resume: eInk is active, skipping display fix-up")
-                return
+            expect_eink = self.eink_enabled_var.get()
+            self.logger.info(
+                f"Resume: running post-resume checks "
+                f"(expect_eink={expect_eink})")
 
-            self.logger.info("Resume: eInk not active — enforcing OLED-only state")
+            checker = ResumeCheck(self.display_mgr, self.logger)
+            results = checker.run(
+                expect_eink=expect_eink,
+                saved_oled_scale=self.saved_oled_scale,
+                saved_keyboard_layout=self.saved_keyboard_layout)
 
-            # Check if eDP-2 got re-enabled by the system
-            if self.display_mgr.is_display_active(self.DISPLAY_EINK):
-                self.logger.info("Resume: eDP-2 is unexpectedly active, disabling it")
-                self.display_mgr.disable_display(self.DISPLAY_EINK)
-                time.sleep(0.5)
-
-                # Re-apply OLED as sole output with saved scale
-                restore_scale = self.saved_oled_scale if self.saved_oled_scale else 1.0
-                self.display_mgr.enable_display(self.DISPLAY_OLED, scale=restore_scale)
-                self.logger.info(f"Resume: re-applied OLED with scale {restore_scale}")
-
-                # Log to GUI (schedule on main thread)
-                self.root.after(0, lambda: self.log_message(
-                    "↻ Fixed display after resume: disabled eDP-2, restored OLED"))
-
-            # Restore keyboard layout
-            if self.saved_keyboard_layout:
-                self.display_mgr.restore_keyboard_layout(self.saved_keyboard_layout)
-                self.logger.info("Resume: keyboard layout restored")
-                self.root.after(0, lambda: self.log_message(
-                    "↻ Keyboard layout restored after resume"))
+            if results:
+                summary = "; ".join(r for r in results
+                                    if not r.startswith("Touchscreen mapped")
+                                    and not r.startswith("Keyboard layout restored"))
+                if summary:
+                    self.root.after(0, lambda s=summary: self.log_message(
+                        f"↻ Post-resume: {s}"))
 
         except Exception as e:
             self.logger.error(f"Resume fix-up failed: {e}")

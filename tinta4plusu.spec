@@ -27,6 +27,7 @@ a = Analysis(
         'ThemeManager',
         'DisplayManager',
         'HelperClient',
+        'ResumeCheck',
         'sv_ttk',
     ],
     hookspath=[],

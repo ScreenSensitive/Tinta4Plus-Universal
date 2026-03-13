@@ -345,6 +345,7 @@ install_script() {
         DisplayManager.py
         ThemeManager.py
         HelperClient.py
+        ResumeCheck.py
         ECController.py
         EInkUSBController.py
         WatchdogTimer.py
