@@ -13,11 +13,13 @@ This is a universal fork of [Tinta4Plus](https://github.com/joncox123/Tinta4Plus
 | Desktop | Session | Status |
 |---------|---------|--------|
 | GNOME | X11 | Tested |
-| GNOME | Wayland | Tested (Mutter D-Bus) |
+| GNOME | Wayland | Supported (Mutter D-Bus) |
 | Cinnamon | X11 | Supported |
 | XFCE | X11 | Tested |
 | KDE Plasma | X11 | Supported |
 | KDE Plasma | Wayland | Supported (kscreen) |
+
+Only **GNOME on X11** and **XFCE on X11** have been properly tested. Other configurations are supported but may have issues.
 
 Base OS: **Ubuntu 24.04 LTS** or later (including Xubuntu, Kubuntu, Linux Mint).
 
@@ -48,40 +50,24 @@ Frontlight control requires EC access, which needs Secure Boot disabled:
 
 ### 3. Install
 
-There are two ways to install: **compiled binaries** (recommended) or **Python scripts** (easier to debug/modify).
+```bash
+sudo bash installer.sh
+```
 
-#### Option A: Compiled binaries (recommended)
+The installer will prompt you to choose between two modes:
 
-Build first, then install:
+#### Python scripts (recommended)
+
+Choose **option 2** (Python scripts) when prompted. This installs the Python source files directly — easier to debug, modify, and update. The installer handles all dependencies automatically.
+
+#### Compiled binaries
+
+Choose **option 1** (compiled binary) when prompted. Requires building first:
 
 ```bash
-# Install build dependency
 pip install pyinstaller
-
-# Build the binaries
 bash build.sh
-
-# Install system-wide
 sudo bash installer.sh
-# Choose option 1 (compiled binary) when prompted
-```
-
-#### Option B: Python scripts (development)
-
-```bash
-sudo bash installer.sh
-# Choose option 2 (Python scripts) when prompted
-```
-
-Or run directly without installing:
-
-```bash
-# Install dependencies manually
-sudo apt install python3-tk python3-usb libusb-1.0-0 feh policykit-1-gnome
-pip install portio pyusb sv-ttk
-
-# Run
-./Tinta4Plus.py
 ```
 
 ### What the installer does
@@ -130,14 +116,21 @@ Click the **eInk Enabled/Disabled** toggle button to switch between OLED and eIn
 eInk panels accumulate ghosting (afterimages) from partial updates. You can clear it with:
 
 - **Refresh button**: click "Refresh eInk (Clear Ghosts)" in the GUI.
-- **Keyboard shortcuts**: press **F5** or **F9** (media key) while the app is focused.
 - **Periodic auto-refresh**: adjust the "Refresh period" slider (0 = off, up to 60 seconds). Defaults to off.
 
 ### Frontlight
 
 Use the brightness slider (0-8) to control the eInk frontlight. The frontlight turns on automatically when switching to eInk and off when switching back to OLED.
 
-**Keyboard shortcuts**: brightness Up/Down media keys (`XF86MonBrightnessUp` / `XF86MonBrightnessDown`) adjust the frontlight when in eInk mode.
+### Global keyboard shortcuts
+
+These shortcuts work system-wide (via evdev in the helper daemon) when eInk is enabled:
+
+| Shortcut | Action |
+|----------|--------|
+| **Help** (Fn+F9) | Refresh eInk (clear ghosts) |
+| **Brightness Up** (Fn+F6) | Increase frontlight brightness |
+| **Brightness Down** (Fn+F5) | Decrease frontlight brightness |
 
 ### Display scaling
 
@@ -230,11 +223,13 @@ If the laptop becomes unresponsive or the eInk/EC behaves erratically:
 
 ## Warning and disclaimer
 
+**This software is experimental. No warranty is offered, express or implied.**
+
 This software was independently developed without any input, support, or documentation from eInk or Lenovo. It writes to low-level hardware (Embedded Controller, USB T-CON) and can potentially cause temporary or permanent hardware damage. It has been tested on a limited number of systems.
 
 **Do not modify `ECController.py` or `EInkUSBController.py`** unless you understand the hardware implications.
 
-Use at your own risk. See the full [EULA](README_EULA_INSTRUCTIONS_WARNINGS.txt) for details.
+Use entirely at your own risk. The authors accept no liability for any damage to your hardware or data. See the full [EULA](README_EULA_INSTRUCTIONS_WARNINGS.txt) for details.
 
 ## Credits
 
