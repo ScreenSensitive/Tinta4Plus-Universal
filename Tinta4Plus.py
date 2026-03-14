@@ -302,7 +302,7 @@ class EInkControlGUI:
         """Load settings from configuration file"""
         # Default settings
         defaults = {
-            'display_scale': 1.75,
+            'display_scale': 1.0,
             'refresh_period': 0,
             'autoswitch_theme': False,
             'flip_countdown': 5
@@ -1069,13 +1069,13 @@ class EInkControlGUI:
                 else:
                     self.log_message("⚠ Failed to enable frontlight (may not be available)", level='error')
 
-                # Step 4: Set reading mode as default for eInk
-                self.log_message("Setting E-Ink to reading mode...")
-                reading_response = self.execute_helper_command('set-reading')
-                if reading_response:
-                    self.log_message("✓ E-Ink set to reading mode")
+                # Step 4: Set dynamic mode as default for eInk
+                self.log_message("Setting E-Ink to dynamic mode...")
+                dynamic_response = self.execute_helper_command('set-dynamic')
+                if dynamic_response:
+                    self.log_message("✓ E-Ink set to dynamic mode")
                 else:
-                    self.log_message("⚠ Failed to set reading mode", level='error')
+                    self.log_message("⚠ Failed to set dynamic mode", level='error')
 
                 # Small delay before disabling OLED
                 time.sleep(0.5)

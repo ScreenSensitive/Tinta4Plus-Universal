@@ -260,13 +260,12 @@ class DisplayManager:
             self.logger.error(f"Image file not found: {image_path}")
             return None
 
-        # Get display geometry
+        # Get display geometry (informational only — don't block on failure)
         geometry = self.get_display_geometry(display_name)
-        if not geometry:
-            self.logger.error(f"Could not determine geometry for {display_name}")
-            return None
-
-        self.logger.info(f"Display {display_name} geometry: {geometry['width']}x{geometry['height']}+{geometry['x']}+{geometry['y']}")
+        if geometry:
+            self.logger.info(f"Display {display_name} geometry: {geometry['width']}x{geometry['height']}+{geometry['x']}+{geometry['y']}")
+        else:
+            self.logger.warning(f"Could not determine geometry for {display_name}, displaying image anyway")
 
         if self.session_type == 'wayland':
             return self._display_image_wayland(image_path, geometry)
