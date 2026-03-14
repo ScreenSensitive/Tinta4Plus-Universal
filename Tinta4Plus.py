@@ -1176,9 +1176,8 @@ class EInkControlGUI:
                 if self.eink_image_process:
                     # Wait for image to fully render on E-Ink.
                     # eInk panels need 2-3s for a full refresh in dynamic mode.
-                    # This wait MUST happen BEFORE disable-eink, because the
-                    # T-CON disable sequence sends commands that can blank the
-                    # panel, overwriting whatever feh was displaying.
+                    # feh must stay running through T-CON disable so the eInk
+                    # retains the privacy image as its last frame.
                     self.log_message("Waiting for image to render on E-Ink...")
                     time.sleep(3.0)
                 else:
@@ -1194,20 +1193,11 @@ class EInkControlGUI:
             else:
                 self.log_message("⚠ Failed to disable frontlight", level='error')
 
-            # Step 7: Kill the image viewer (image is now persisted on E-Ink)
-            if self.eink_image_process:
-                try:
-                    self.eink_image_process.terminate()
-                    self.eink_image_process.wait(timeout=2)
-                    self.log_message("Closed image viewer (image persisted on E-Ink)")
-                except:
-                    try:
-                        self.eink_image_process.kill()
-                    except:
-                        pass
-                self.eink_image_process = None
-
-            # Step 8: Disable E-Ink via USB controller
+            # Step 7: Disable E-Ink via USB controller
+            # IMPORTANT: disable T-CON while feh is still running so the
+            # eInk panel retains the privacy image as its last frame.
+            # Killing feh first would cause the desktop to flash on eDP-2,
+            # and the eInk would start refreshing to that instead.
             self.log_message("Disabling E-Ink display via USB controller...")
             response = self.execute_helper_command('disable-eink')
 
@@ -1216,7 +1206,20 @@ class EInkControlGUI:
                 self.eink_toggle_btn.config(text="eInk Disabled", bg="#FF8C00", fg="white")
                 self.update_status("E-Ink display disabled")
 
-                # Step 8: Enable OLED display on eDP-1, restoring previous scale
+                # Step 8: Kill the image viewer (T-CON is off, eInk retains the image)
+                if self.eink_image_process:
+                    try:
+                        self.eink_image_process.terminate()
+                        self.eink_image_process.wait(timeout=2)
+                        self.log_message("Closed image viewer (image persisted on E-Ink)")
+                    except:
+                        try:
+                            self.eink_image_process.kill()
+                        except:
+                            pass
+                    self.eink_image_process = None
+
+                # Step 9: Enable OLED display on eDP-1, restoring previous scale
                 restore_scale = self.saved_oled_scale if self.saved_oled_scale else 1.0
                 self.log_message(f"Enabling OLED display on {self.DISPLAY_OLED} with scale {restore_scale}...")
                 if self.display_mgr.enable_display(self.DISPLAY_OLED, scale=restore_scale):
