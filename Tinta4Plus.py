@@ -191,9 +191,7 @@ class EInkControlGUI:
     # E-Ink privacy images (one picked at random when disabling E-Ink)
     # NOTE: must install feh and imv for this to work!
     EINK_DISABLED_IMAGES = [
-        "eink-disable1.jpg",
-        "eink-disable2.jpg",
-        "eink-disable3.jpg",
+        "eink-disable.jpg",
     ]
 
     # XFCE theme names
