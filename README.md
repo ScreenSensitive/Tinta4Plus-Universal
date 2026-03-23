@@ -14,7 +14,7 @@ This is a universal fork of [Tinta4Plus](https://github.com/joncox123/Tinta4Plus
 |---------|---------|--------|
 | GNOME | X11 | Tested |
 | GNOME | Wayland | Supported (Mutter D-Bus) |
-| Cinnamon | X11 | Supported |
+| Cinnamon | X11 | Tested (CachyOS) |
 | XFCE | X11 | Tested |
 | KDE Plasma | X11 | Supported |
 | KDE Plasma | Wayland | Supported (kscreen) |
@@ -188,6 +188,12 @@ Two-process model communicating via Unix socket (`/tmp/tinta4plusu.sock`):
 During installation you can optionally install a PolicyKit policy (`org.tinta4plusu.helper.policy`) that caches authentication so you don't need to re-enter your password every time the helper starts. The first launch still requires authentication.
 
 On GNOME and Cinnamon, the `policykit-1-gnome` package is required for `pkexec` to show a password dialog. The installer installs this automatically.
+
+## External monitor hotplug
+
+When an external monitor is connected or disconnected while eInk is active, the app automatically re-enforces eInk-only mode within a few seconds. This prevents the desktop from extending or cloning onto the eInk panel during display reconfiguration.
+
+The hotplug monitor runs as a background thread, detects xrandr configuration changes, and disables eDP-1 (OLED) if it was re-enabled by the desktop environment.
 
 ## Troubleshooting
 

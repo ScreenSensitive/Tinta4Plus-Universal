@@ -1503,6 +1503,50 @@ class EInkControlGUI:
             target=self._resume_monitor_loop, daemon=True,
             name='resume-monitor')
         self._resume_monitor_thread.start()
+        # Also monitor for hotplug events (external monitor connect/disconnect)
+        self._hotplug_monitor_thread = threading.Thread(
+            target=self._hotplug_monitor_loop, daemon=True,
+            name='hotplug-monitor')
+        self._hotplug_monitor_thread.start()
+
+    def _hotplug_monitor_loop(self):
+        """Watch for xrandr hotplug events and re-enforce display state."""
+        try:
+            import subprocess
+            proc = subprocess.Popen(
+                ['xrandr', '--auto', '--dryrun'],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        except Exception:
+            pass
+        try:
+            proc = subprocess.Popen(
+                ['sh', '-c',
+                 'xrandr --verbose 2>&1 | grep -i "output\|connected\|disconnected"'],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        except Exception:
+            return
+        # Poll xrandr for output changes every 3 seconds
+        import time as _time
+        prev = None
+        while not self._resume_monitor_stop.is_set():
+            self._resume_monitor_stop.wait(3.0)
+            if self._resume_monitor_stop.is_set():
+                break
+            try:
+                result = subprocess.run(
+                    ['xrandr'],
+                    capture_output=True, text=True, timeout=5)
+                curr = result.stdout
+                if prev is not None and curr != prev:
+                    self.logger.info("Hotplug detected: display configuration changed")
+                    _time.sleep(1.5)
+                    # Only intervene if eInk is active — suppress OLED coming back
+                    if self.eink_enabled_var.get():
+                        self.logger.info("Hotplug: eInk active, re-enforcing eInk state")
+                        self._on_system_resume()
+                prev = curr
+            except Exception:
+                pass
 
     def _resume_monitor_loop(self):
         """Background loop: listen for PrepareForSleep(false) from logind."""
