@@ -448,12 +448,14 @@ class DisplayManager:
         """Display fullscreen image using feh (preferred on X11), fallback to imv."""
         if self._command_exists('feh'):
             try:
+                geo = "{0}x{1}+{2}+{3}".format(geometry['width'], geometry['height'], geometry['x'], geometry['y']) if geometry else "2560x1600+0+0"
                 cmd = [
                     'feh',
-                    '--fullscreen',
                     '--auto-zoom',
                     '--no-menus',
                     '--hide-pointer',
+                    '--borderless',
+                    '--geometry', geo,
                     image_path
                 ]
                 self.logger.info("Displaying fullscreen image using feh")
@@ -1096,12 +1098,14 @@ except Exception as e:
         # feh may work under XWayland
         if self._command_exists('feh'):
             try:
+                geo = "{0}x{1}+{2}+{3}".format(geometry['width'], geometry['height'], geometry['x'], geometry['y']) if geometry else "2560x1600+0+0"
                 cmd = [
                     'feh',
-                    '--fullscreen',
                     '--auto-zoom',
                     '--no-menus',
                     '--hide-pointer',
+                    '--borderless',
+                    '--geometry', geo,
                     image_path
                 ]
                 self.logger.info("Displaying fullscreen image using feh (XWayland fallback)")

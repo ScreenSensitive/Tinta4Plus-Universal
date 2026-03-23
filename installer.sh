@@ -195,7 +195,7 @@ install_deps() {
     step "Installing system dependencies"
 
     # Common packages
-    local pkgs="libusb-1.0-0"
+    local pkgs="libusb-1.0-0 feh"
 
     # Python scripts need the full Python stack
     if [ "$INSTALL_MODE" = "script" ]; then
@@ -216,36 +216,62 @@ install_deps() {
             ;;
     esac
 
-    if ! apt-get update -qq >> "$LOG_FILE" 2>&1; then
-        error "apt-get update failed. Check your internet connection and sources."
-        error "See: ${LOG_FILE}"
-        exit 1
-    fi
-
-    if ! apt-get install -y -qq $pkgs >> "$LOG_FILE" 2>&1; then
-        error "apt-get install failed for packages: ${pkgs}"
-        error "See: ${LOG_FILE}"
-        exit 1
-    fi
-    info "APT packages installed: ${pkgs}"
-
-    # Script mode: install pip packages not available in apt
-    if [ "$INSTALL_MODE" = "script" ]; then
-        step "Installing Python pip packages (portio, pyusb, sv-ttk)"
-        local pip_cmd="pip3"
-        if ! command -v pip3 &>/dev/null; then
-            apt-get install -y -qq python3-pip >> "$LOG_FILE" 2>&1
+    # Detect package manager and branch
+    if command -v pacman &>/dev/null; then
+        # Arch / CachyOS / Manjaro
+        local pkgs_arch="libusb python-pyusb tk xorg-xset feh"
+        case "$DE" in
+            gnome|cinnamon) pkgs_arch="$pkgs_arch polkit-gnome" ;;
+            kde)            pkgs_arch="$pkgs_arch kscreen plasma-workspace" ;;
+            xfce)           pkgs_arch="$pkgs_arch xfce4-settings" ;;
+        esac
+        if ! pacman -S --needed --noconfirm $pkgs_arch >> "$LOG_FILE" 2>&1; then
+            error "pacman install failed for: ${pkgs_arch}"
+            error "See: ${LOG_FILE}"
+            exit 1
         fi
-        # Install as system-wide (running as root)
-        if $pip_cmd install --break-system-packages portio pyusb sv-ttk >> "$LOG_FILE" 2>&1; then
-            info "pip packages installed."
-        elif $pip_cmd install portio pyusb sv-ttk >> "$LOG_FILE" 2>&1; then
-            info "pip packages installed."
-        else
-            warn "pip install failed for portio/pyusb/sv-ttk."
-            warn "You will need to run manually: pip3 install portio pyusb sv-ttk"
-            warn "See: ${LOG_FILE}"
+        info "pacman packages installed: ${pkgs_arch}"
+        if [ "$INSTALL_MODE" = "script" ]; then
+            step "Installing pip packages system-wide (portio, evdev, sv-ttk)"
+            # pkexec uses system Python so these must be system-wide not in a venv
+            if ! pip install --break-system-packages portio evdev sv-ttk >> "$LOG_FILE" 2>&1; then
+                warn "pip install failed. Run manually:"
+                warn "  sudo pip install --break-system-packages portio evdev sv-ttk"
+            else
+                info "pip packages installed: portio evdev sv-ttk"
+            fi
         fi
+    elif command -v apt-get &>/dev/null; then
+        # Ubuntu / Debian / Mint
+        if ! apt-get update -qq >> "$LOG_FILE" 2>&1; then
+            error "apt-get update failed. Check your internet connection and sources."
+            error "See: ${LOG_FILE}"
+            exit 1
+        fi
+        if ! apt-get install -y -qq $pkgs >> "$LOG_FILE" 2>&1; then
+            error "apt-get install failed for packages: ${pkgs}"
+            error "See: ${LOG_FILE}"
+            exit 1
+        fi
+        info "APT packages installed: ${pkgs}"
+        if [ "$INSTALL_MODE" = "script" ]; then
+            step "Installing Python pip packages (portio, pyusb, sv-ttk)"
+            local pip_cmd="pip3"
+            if ! command -v pip3 &>/dev/null; then
+                apt-get install -y -qq python3-pip >> "$LOG_FILE" 2>&1
+            fi
+            if $pip_cmd install --break-system-packages portio pyusb sv-ttk >> "$LOG_FILE" 2>&1; then
+                info "pip packages installed."
+            elif $pip_cmd install portio pyusb sv-ttk >> "$LOG_FILE" 2>&1; then
+                info "pip packages installed."
+            else
+                warn "pip install failed for portio/pyusb/sv-ttk."
+                warn "Run manually: pip3 install portio pyusb sv-ttk"
+            fi
+        fi
+    else
+        error "No supported package manager found (pacman or apt-get required)."
+        exit 1
     fi
 }
 
@@ -284,7 +310,7 @@ check_deps() {
     # Check display tools
     if ! command -v feh &>/dev/null && ! command -v imv &>/dev/null; then
         warn "Neither 'feh' nor 'imv' found — privacy image display may not work."
-        warn "Install one with: apt install feh"
+        warn "Install with: sudo pacman -S feh  (Arch)  or  sudo apt install feh  (Ubuntu)"
     fi
 
     if [ ${#missing[@]} -eq 0 ]; then

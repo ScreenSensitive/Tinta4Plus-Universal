@@ -21,7 +21,9 @@ This is a universal fork of [Tinta4Plus](https://github.com/joncox123/Tinta4Plus
 
 Only **GNOME on X11** and **XFCE on X11** have been properly tested. Other configurations are supported but may have issues.
 
-Base OS: **Ubuntu 24.04 LTS** or later (including Xubuntu, Kubuntu, Linux Mint).
+Base OS:
+- **Ubuntu 24.04 LTS** or later (including Xubuntu, Kubuntu, Linux Mint)
+- **Arch Linux** / CachyOS (tested) — other Arch-based distros may work but are untested
 
 ## Hardware
 
